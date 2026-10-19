@@ -23,15 +23,15 @@ rust-version = "1.87"
 
 [workspace.dependencies]
 # Internal crates.
-tilemaker-geom = { path = "crates/tilemaker-geom" }
-tilemaker-pbf = { path = "crates/tilemaker-pbf" }
-tilemaker-store = { path = "crates/tilemaker-store" }
-tilemaker-config = { path = "crates/tilemaker-config" }
-tilemaker-mvt = { path = "crates/tilemaker-mvt" }
-tilemaker-output = { path = "crates/tilemaker-output" }
-tilemaker-lua = { path = "crates/tilemaker-lua", default-features = false }
-tilemaker-core = { path = "crates/tilemaker-core", default-features = false }
-tilemaker-export = { path = "crates/tilemaker-export" }
+tilemaker-geom = { path = "crates/tilemaker-geom", version = "=0.1.0" }
+tilemaker-pbf = { path = "crates/tilemaker-pbf", version = "=0.1.0" }
+tilemaker-store = { path = "crates/tilemaker-store", version = "=0.1.0" }
+tilemaker-config = { path = "crates/tilemaker-config", version = "=0.1.0" }
+tilemaker-mvt = { path = "crates/tilemaker-mvt", version = "=0.1.0" }
+tilemaker-output = { path = "crates/tilemaker-output", version = "=0.1.0" }
+tilemaker-lua = { path = "crates/tilemaker-lua", version = "=0.1.0", default-features = false }
+tilemaker-core = { path = "crates/tilemaker-core", version = "=0.1.0", default-features = false }
+tilemaker-export = { path = "crates/tilemaker-export", version = "=0.1.0" }
 
 # External crates.
 anyhow = "1"

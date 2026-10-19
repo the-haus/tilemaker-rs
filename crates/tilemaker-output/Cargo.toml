@@ -5,6 +5,7 @@ version.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+description = "tilemaker — MBTiles, PMTiles v3 and directory tile writers."
 
 [dependencies]
 flate2.workspace = true
