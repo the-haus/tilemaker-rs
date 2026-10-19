@@ -54,12 +54,17 @@ pub fn visvalingam(pts: &[crate::Coord], threshold: f64, retain: usize) -> Vec<c
     if n <= retain.max(2) {
         return pts.to_vec();
     }
-    #[derive(PartialEq, PartialOrd)]
+    #[derive(PartialEq)]
     struct Key(f64);
     impl Eq for Key {}
     impl Ord for Key {
         fn cmp(&self, o: &Self) -> std::cmp::Ordering {
             self.0.total_cmp(&o.0)
+        }
+    }
+    impl PartialOrd for Key {
+        fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(o))
         }
     }
     let mut area = vec![f64::INFINITY; n];
