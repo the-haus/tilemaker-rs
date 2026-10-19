@@ -446,3 +446,59 @@ fn feature_limit_z_order_and_multipoints() {
     assert_eq!(all.features.len(), 1);
     assert_eq!(all.features[0].decode_geometry()[0].len(), 10);
 }
+
+/// Below `combine_polygons_below` touching areas with the same attributes
+/// become one feature; below `filter_below` tiny areas disappear.
+#[test]
+fn combines_and_filters_polygons() {
+    let path = temp("fields.osm.pbf");
+    let mut w = PbfWriter::with_options(
+        Vec::new(),
+        WriterOptions {
+            sorted: true,
+            ..Default::default()
+        },
+    );
+    // Two adjacent 0.008° squares and a 0.0001° speck, all inside z14
+    // tile 8192/8191 (lon and lat 0–0.022°), away from its edges.
+    let pts = [
+        (1, 0.002, 0.002),
+        (2, 0.010, 0.002),
+        (3, 0.010, 0.010),
+        (4, 0.002, 0.010),
+        (5, 0.018, 0.002),
+        (6, 0.018, 0.010),
+        (7, 0.0150, 0.0150),
+        (8, 0.0151, 0.0150),
+        (9, 0.0151, 0.0151),
+        (10, 0.0150, 0.0151),
+    ];
+    for (id, lon, lat) in pts {
+        w.node(id, e7(lat), e7(lon), &[]).unwrap();
+    }
+    w.way(100, &[1, 2, 3, 4, 1], &[("landuse", "farmland")]).unwrap();
+    w.way(101, &[2, 5, 6, 3, 2], &[("landuse", "farmland")]).unwrap();
+    w.way(102, &[7, 8, 9, 10, 7], &[("landuse", "farmland")]).unwrap();
+    std::fs::write(&path, w.finish().unwrap()).unwrap();
+    let config = Config::from_json(
+        r#"{"layers":{"landuse":{"minzoom":10,"maxzoom":14,"combine_polygons_below":14,"filter_below":14,"filter_area":1}},
+            "settings":{"minzoom":10,"maxzoom":14,"basezoom":14,"name":"x","version":"1","description":"","compress":"none"}}"#,
+    )
+    .unwrap();
+    let profile = r#"function way_function() Layer("landuse", true); Attribute("class", Find("landuse")) end"#;
+    let file = PbfFile::open(&path).unwrap();
+    let mut by_zoom = std::collections::BTreeMap::new();
+    generate(&file, &config, profile, "p.lua", &TileOptions::default(), |e| {
+        if let Event::Tile(t) = e {
+            let n: usize = decode(&t.data).unwrap().layers.iter().map(|l| l.features.len()).sum();
+            *by_zoom.entry(t.z).or_insert(0) += n;
+        }
+        Flow::Continue
+    })
+    .unwrap();
+    // z10–z13: the two squares unioned, the speck filtered. z14: all three.
+    for z in 10..=13 {
+        assert_eq!(by_zoom[&z], 1, "z{z}: {by_zoom:?}");
+    }
+    assert_eq!(by_zoom[&14], 3, "{by_zoom:?}");
+}
