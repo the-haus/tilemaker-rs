@@ -1,9 +1,9 @@
 //! Node locations.
 //!
-//! The in-memory store keeps each block's nodes sorted, in groups of 64:
+//! The in-memory store keeps each block's nodes sorted, in groups of 16:
 //! one full id per group, the rest as varint deltas, and the locations as
 //! fixed (lat, lon) pairs. That is about ten bytes a node, and a lookup is a
-//! binary search plus at most 63 varint decodes.
+//! binary search plus at most 15 varint decodes.
 //!
 //! The dense file store maps `id × 8` bytes of a sparse file into memory, as
 //! osmium's `dense_mmap_array` does: constant-time lookups and no per-node
@@ -22,26 +22,29 @@ use crate::StoreError;
 /// A WGS84 location at 1e-7 degrees.
 pub type Location = (i32, i32);
 
-const GROUP: usize = 64;
+const GROUP: usize = 16;
 
 /// One block's worth of nodes.
 struct Chunk {
     first_id: i64,
     last_id: i64,
     /// Per group: (first id, byte offset of the group's deltas).
-    groups: Vec<(i64, u32)>,
+    /// Per group: the first id, and where its deltas start.
+    group_ids: Vec<i64>,
+    group_offsets: Vec<u32>,
     deltas: Vec<u8>,
     locs: Vec<Location>,
 }
 
 impl Chunk {
     fn build(entries: &[(i64, Location)]) -> Self {
-        let mut groups = Vec::with_capacity(entries.len() / GROUP + 1);
+        let mut group_ids = Vec::with_capacity(entries.len() / GROUP + 1);
+        let mut group_offsets = Vec::with_capacity(entries.len() / GROUP + 1);
         let mut deltas = Vec::with_capacity(entries.len() * 2);
         let mut locs = Vec::with_capacity(entries.len());
-        for (gi, group) in entries.chunks(GROUP).enumerate() {
-            let _ = gi;
-            groups.push((group[0].0, deltas.len() as u32));
+        for group in entries.chunks(GROUP) {
+            group_ids.push(group[0].0);
+            group_offsets.push(deltas.len() as u32);
             let mut prev = group[0].0;
             for (k, &(id, loc)) in group.iter().enumerate() {
                 if k > 0 {
@@ -55,21 +58,22 @@ impl Chunk {
         Self {
             first_id: entries[0].0,
             last_id: entries[entries.len() - 1].0,
-            groups,
+            group_ids,
+            group_offsets,
             deltas,
             locs,
         }
     }
 
     fn get(&self, id: i64) -> Option<Location> {
-        let g = match self.groups.binary_search_by(|(first, _)| first.cmp(&id)) {
+        let g = match self.group_ids.binary_search(&id) {
             Ok(g) => return Some(self.locs[g * GROUP]),
             Err(0) => return None,
             Err(g) => g - 1,
         };
         let end = self.locs.len().min((g + 1) * GROUP);
-        let mut pos = self.groups[g].1 as usize;
-        let mut cur = self.groups[g].0;
+        let mut pos = self.group_offsets[g] as usize;
+        let mut cur = self.group_ids[g];
         for i in g * GROUP + 1..end {
             let (d, n) = get_varint(&self.deltas[pos..]);
             pos += n;
@@ -89,8 +93,8 @@ impl Chunk {
         let mut cur = 0i64;
         self.locs.iter().enumerate().map(move |(i, &loc)| {
             if i % GROUP == 0 {
-                cur = self.groups[i / GROUP].0;
-                pos = self.groups[i / GROUP].1 as usize;
+                cur = self.group_ids[i / GROUP];
+                pos = self.group_offsets[i / GROUP] as usize;
             } else {
                 let (d, n) = get_varint(&self.deltas[pos..]);
                 pos += n;
@@ -101,7 +105,7 @@ impl Chunk {
     }
 
     fn bytes(&self) -> usize {
-        self.groups.len() * 16 + self.deltas.len() + self.locs.len() * 8
+        self.group_ids.len() * 12 + self.deltas.len() + self.locs.len() * 8
     }
 }
 
