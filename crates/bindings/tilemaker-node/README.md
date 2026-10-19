@@ -40,9 +40,13 @@ Windows (x64). Node.js 18 or newer.
 
 ## Why
 
-| | `osmium export` (GeoJSON) | `@tilemaker-rs/node` (GeoJSON lines) | `@tilemaker-rs/node` (objects) |
-|---|---|---|---|
-| World boundaries + cities (540 MB extract) | 130 s, 4.1 GB | 51 s, 2.8 GB | **9.7 s**, 2.7 GB |
+| | osmium | `@tilemaker-rs/node` |
+|---|---|---|
+| Countries, regions, cities and towns from the 95 GB planet | `tags-filter` + `export`: 591 s, 4.1 GB, a 5 GB GeoJSON file | **152 s, 1.6 GB**, objects streamed (disk-bound) |
+| The same from a 540 MB extract | `export`: 130 s, 4.1 GB | **~10 s**, 2.6 GB (51 s as GeoJSON lines) |
+
+Both give the same 115,331 cities and towns and the same 3,567 country and
+region multipolygons, ring for ring.
 
 Decoding the full 95 GB planet runs at ~610 MB/s (156 s for 10.9 billion
 nodes, 1.2 billion ways, 14.9 million relations) with a 574 MB footprint, on

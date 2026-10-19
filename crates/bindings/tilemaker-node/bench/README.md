@@ -17,7 +17,7 @@ Results (10-core Apple M-series, planet of 2026-10-12, 95 GB):
 | | time | peak RSS |
 |---|---|---|
 | `osmium tags-filter` + `osmium export` (GeoJSON) | 462 s + 129 s | 3.2 GB / 4.1 GB |
-| `features({ filters })` straight from the planet | 244 s | 1.4 GB |
+| `features({ filters })` straight from the planet | 152 s (disk-bound, cold cache) | 1.6 GB |
 
 Both produce the same 115,331 cities and towns and the same 3,567
 country/region multipolygons (identical rings and points).

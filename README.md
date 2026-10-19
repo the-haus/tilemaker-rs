@@ -54,9 +54,10 @@ crates, and bindings under `crates/bindings`.
   same tags, and the same 249,381 boundary multipolygons with identical
   polygon, ring and point counts and areas for all but 3 (where a
   self-touching ring is split at a different node; same area).
-- **Tiles** vs the C++ tilemaker with the OpenMapTiles profile on Monaco
-  and Liechtenstein: the same tiles, and per zoom and layer feature counts
-  within 1% (most layers identical; overall within 0.3%). These comparisons
+- **Tiles** vs the C++ tilemaker with the OpenMapTiles profile on Monaco,
+  Liechtenstein and a 2.6 GB Netherlands extract (48 million features):
+  the same non-empty tiles, feature counts within 0.03% overall (within 1%
+  per zoom and layer), total tile bytes within 0.5%. These comparisons
   run in the test suite when the extracts are present (see
   [fixtures](fixtures/README.md)).
 
@@ -67,9 +68,11 @@ On a 10-core Apple M-series machine:
 | task | this | reference |
 |---|---|---|
 | decode the planet (95 GB) | 156 s (610 MB/s), 0.6 GB RSS | |
-| world boundaries + cities from a 540 MB extract, as objects in Node | 9.7 s, 2.7 GB | |
+| countries, regions, cities and towns straight from the planet (Node) | 152 s, 1.6 GB (disk-bound, cold cache) | `osmium tags-filter` + `osmium export`: 462 s + 129 s, 4.1 GB |
+| world boundaries + cities from a 540 MB extract, as objects in Node | ~10 s, 2.6 GB | |
 | the same, written as GeoJSON lines | 51 s, 2.8 GB | `osmium export`: 130 s, 4.1 GB |
-| Liechtenstein, OpenMapTiles profile → MBTiles | 1.1 s, 142 MB | C++ tilemaker: 2.4 s, 2.5 GB |
+| Netherlands+ (2.6 GB), OpenMapTiles profile → MBTiles | 96 s, 11.5 GB | C++ tilemaker: 99 s, 9.5 GB |
+| Liechtenstein, OpenMapTiles profile → MBTiles | 1.3 s, 130 MB | C++ tilemaker: 2.0 s, 1.5 GB |
 
 ## Documentation
 
