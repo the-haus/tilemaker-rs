@@ -385,3 +385,64 @@ fn deterministic_across_thread_counts() {
     .0;
     assert_eq!(a, b);
 }
+
+/// Ten cafés with ranks: a layer limited to 3 features keeps the highest
+/// z_order (descending when a limit is set), and identical points merge.
+#[test]
+fn feature_limit_z_order_and_multipoints() {
+    let path = temp("cafes.osm.pbf");
+    let mut w = PbfWriter::with_options(
+        Vec::new(),
+        WriterOptions {
+            sorted: true,
+            ..Default::default()
+        },
+    );
+    for i in 1..=10i64 {
+        let rank = i.to_string();
+        w.node(
+            i,
+            e7(0.001 * i as f64),
+            e7(0.001 * i as f64),
+            &[("amenity", "cafe"), ("rank", &rank)],
+        )
+        .unwrap();
+    }
+    std::fs::write(&path, w.finish().unwrap()).unwrap();
+    let config = Config::from_json(
+        r#"{"layers":{"top":{"minzoom":14,"maxzoom":14,"feature_limit":3},"all":{"minzoom":14,"maxzoom":14}},
+            "settings":{"minzoom":14,"maxzoom":14,"basezoom":14,"name":"x","version":"1","description":"","compress":"none"}}"#,
+    )
+    .unwrap();
+    let profile = r#"
+      function node_function()
+        local r = tonumber(Find("rank"))
+        Layer("top"); Attribute("rank", Find("rank")); ZOrder(r)
+        Layer("all"); Attribute("kind", "cafe")
+      end"#;
+    let file = PbfFile::open(&path).unwrap();
+    let mut tiles = Vec::new();
+    generate(&file, &config, profile, "p.lua", &TileOptions::default(), |e| {
+        if let Event::Tile(t) = e {
+            tiles.push(t);
+        }
+        Flow::Continue
+    })
+    .unwrap();
+    assert_eq!(tiles.len(), 1);
+    let t = decode(&tiles[0].data).unwrap();
+    let top = t.layers.iter().find(|l| l.name == "top").unwrap();
+    let ranks: Vec<String> = top
+        .features
+        .iter()
+        .map(|f| match f.properties(top)[0].1 {
+            Value::String(s) => s.clone(),
+            v => panic!("{v:?}"),
+        })
+        .collect();
+    assert_eq!(ranks, vec!["10", "9", "8"]);
+    // Identical attributes: the ten cafés become one multipoint.
+    let all = t.layers.iter().find(|l| l.name == "all").unwrap();
+    assert_eq!(all.features.len(), 1);
+    assert_eq!(all.features[0].decode_geometry()[0].len(), 10);
+}
