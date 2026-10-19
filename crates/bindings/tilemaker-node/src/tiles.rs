@@ -88,6 +88,9 @@ pub(crate) fn prepare(o: &TileStreamOptions, streaming: bool) -> Result<Prepared
         opts: TileOptions {
             threads: o.threads.unwrap_or(0) as usize,
             bbox,
+            // Streamed tiles are compressed on the render workers;
+            // writeTiles takes the sink's compression.
+            compression: if streaming { compression } else { Compression::None },
         },
         name: o.process_name.clone().unwrap_or_else(|| "process.lua".into()),
         profile: o.process_source.clone(),
@@ -195,8 +198,7 @@ pub(crate) fn spawn_tiles(
                     }
                     match e {
                         Event::Tile(t) => {
-                            let data = tilemaker_output::compress(&t.data, p.compression);
-                            batch.push(t.z, t.x, t.y, &data);
+                            batch.push(t.z, t.x, t.y, &t.data);
                             if batch.len() >= batch_size || batch.data.len() >= MAX_BATCH_BYTES {
                                 return flush(&mut batch);
                             }

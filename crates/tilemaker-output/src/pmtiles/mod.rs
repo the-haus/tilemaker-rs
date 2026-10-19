@@ -500,12 +500,16 @@ impl PmtilesWriter {
 }
 
 impl TileSink for PmtilesWriter {
-    fn write_tile(&mut self, z: u8, x: u32, y: u32, data: &[u8]) -> Result<(), OutputError> {
+    fn compression(&self) -> Compression {
+        self.compression
+    }
+
+    fn write_compressed(&mut self, z: u8, x: u32, y: u32, data: &[u8]) -> Result<(), OutputError> {
         if z > 31 || (u64::from(x) >> z) != 0 || (u64::from(y) >> z) != 0 {
             return Err(OutputError::Other(format!("tile {z}/{x}/{y} out of range")));
         }
         let id = zxy_to_tileid(z, x, y);
-        let idx = self.intern(compress(data, self.compression))?;
+        let idx = self.intern(data.to_vec())?;
         self.tiles.push((id, idx));
         Ok(())
     }

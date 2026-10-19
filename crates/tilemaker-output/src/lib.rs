@@ -81,8 +81,22 @@ pub(crate) fn extra_value_string(v: &serde_json::Value) -> String {
 
 /// Destination for generated tiles.
 pub trait TileSink: Send {
+    /// How this sink stores tiles.
+    fn compression(&self) -> Compression;
+
+    /// Writes tile bytes already compressed as [`compression`](Self::compression)
+    /// says (so callers can compress on many threads).
+    fn write_compressed(&mut self, z: u8, x: u32, y: u32, data: &[u8]) -> Result<(), OutputError>;
+
     /// `data` is the *uncompressed* MVT bytes; the sink applies its own compression policy.
-    fn write_tile(&mut self, z: u8, x: u32, y: u32, data: &[u8]) -> Result<(), OutputError>;
+    fn write_tile(&mut self, z: u8, x: u32, y: u32, data: &[u8]) -> Result<(), OutputError> {
+        let c = self.compression();
+        if c == Compression::None {
+            self.write_compressed(z, x, y, data)
+        } else {
+            self.write_compressed(z, x, y, &compress(data, c))
+        }
+    }
 
     /// Writes metadata and finalises the output. Must be called once, after
     /// all tiles have been written.
@@ -127,7 +141,11 @@ impl MemorySink {
 }
 
 impl TileSink for MemorySink {
-    fn write_tile(&mut self, z: u8, x: u32, y: u32, data: &[u8]) -> Result<(), OutputError> {
+    fn compression(&self) -> Compression {
+        Compression::None
+    }
+
+    fn write_compressed(&mut self, z: u8, x: u32, y: u32, data: &[u8]) -> Result<(), OutputError> {
         self.tiles.push((z, x, y, data.to_vec()));
         Ok(())
     }

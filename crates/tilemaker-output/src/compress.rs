@@ -6,9 +6,10 @@ use flate2::read::{GzDecoder, ZlibDecoder};
 use flate2::write::{GzEncoder, ZlibEncoder};
 
 /// Tile compression policy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Compression {
     /// Store tiles uncompressed.
+    #[default]
     None,
     /// gzip stream.
     Gzip,

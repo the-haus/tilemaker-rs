@@ -131,7 +131,7 @@ pub struct Tile {
     pub x: u32,
     /// Row (XYZ).
     pub y: u32,
-    /// MVT bytes.
+    /// MVT bytes, compressed as [`TileOptions::compression`] says.
     pub data: Vec<u8>,
 }
 
@@ -143,6 +143,9 @@ pub struct TileOptions {
     /// Only write tiles intersecting `[west, south, east, north]` (instead
     /// of the file header's box, as tilemaker's `--bbox`).
     pub bbox: Option<[f64; 4]>,
+    /// Compress tiles as they are rendered, on the worker threads (default
+    /// none). [`write_tiles`] sets this to the sink's compression.
+    pub compression: tilemaker_output::Compression,
 }
 
 /// Counters from a run.
@@ -255,25 +258,35 @@ pub fn generate(
             if chunk.is_empty() {
                 break;
             }
-            let rendered: Vec<Option<Tile>> = pool.install(|| {
+            let rendered: Vec<Option<(usize, Tile)>> = pool.install(|| {
                 use rayon::prelude::*;
                 chunk
                     .into_par_iter()
                     .map(|(t, objs)| {
-                        renderer.render(z, t, objs).map(|data| Tile {
-                            z,
-                            x: t.x,
-                            y: t.y,
-                            data,
+                        renderer.render(z, t, objs).map(|data| {
+                            let raw = data.len();
+                            let data = match opts.compression {
+                                tilemaker_output::Compression::None => data,
+                                c => tilemaker_output::compress(&data, c),
+                            };
+                            (
+                                raw,
+                                Tile {
+                                    z,
+                                    x: t.x,
+                                    y: t.y,
+                                    data,
+                                },
+                            )
                         })
                     })
                     .collect()
             });
             done += rendered.len();
-            for t in rendered.into_iter().flatten() {
+            for (raw, t) in rendered.into_iter().flatten() {
                 stats.tiles += 1;
                 stats.tiles_per_zoom[z as usize] += 1;
-                stats.bytes += t.data.len() as u64;
+                stats.bytes += raw as u64;
                 if sink(Event::Tile(t)) == Flow::Stop {
                     stopped = true;
                     break 'zooms;
@@ -308,8 +321,13 @@ pub fn write_tiles(
     mut progress: impl FnMut(Progress) -> Flow,
 ) -> Result<(TileStats, TilesetMetadata), CoreError> {
     let mut err = None;
-    let (stats, meta) = generate(file, config, profile_source, profile_name, opts, |e| match e {
-        Event::Tile(t) => match sink.write_tile(t.z, t.x, t.y, &t.data) {
+    // Tiles are compressed on the workers, as the sink stores them.
+    let opts = TileOptions {
+        compression: sink.compression(),
+        ..opts.clone()
+    };
+    let (stats, meta) = generate(file, config, profile_source, profile_name, &opts, |e| match e {
+        Event::Tile(t) => match sink.write_compressed(t.z, t.x, t.y, &t.data) {
             Ok(()) => Flow::Continue,
             Err(e) => {
                 err = Some(e);

@@ -195,6 +195,7 @@ fn tiles(a: TileArgs) -> Result<()> {
         &TileOptions {
             threads: a.threads,
             bbox: a.bbox,
+            ..Default::default()
         },
         sink.as_mut(),
         |p| {

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::{compress, decompress, extra_value_string, Compression, OutputError, TileSink, TilesetMetadata};
+use crate::{decompress, extra_value_string, Compression, OutputError, TileSink, TilesetMetadata};
 
 /// Number of tile inserts per transaction.
 const BATCH_SIZE: usize = 10_000;
@@ -117,8 +117,11 @@ fn tms_row(z: u8, y: u32) -> u32 {
 }
 
 impl TileSink for MbtilesWriter {
-    fn write_tile(&mut self, z: u8, x: u32, y: u32, data: &[u8]) -> Result<(), OutputError> {
-        let blob = compress(data, self.compression);
+    fn compression(&self) -> Compression {
+        self.compression
+    }
+
+    fn write_compressed(&mut self, z: u8, x: u32, y: u32, blob: &[u8]) -> Result<(), OutputError> {
         if !self.in_transaction {
             self.conn.execute_batch("BEGIN;")?;
             self.in_transaction = true;

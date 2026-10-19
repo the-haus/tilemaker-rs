@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 
-use crate::{compress, decompress, Compression, OutputError, TileSink, TilesetMetadata};
+use crate::{decompress, Compression, OutputError, TileSink, TilesetMetadata};
 
 /// Writes each tile to its own file.
 #[derive(Debug)]
@@ -37,11 +37,15 @@ impl DirectoryWriter {
 }
 
 impl TileSink for DirectoryWriter {
-    fn write_tile(&mut self, z: u8, x: u32, y: u32, data: &[u8]) -> Result<(), OutputError> {
+    fn compression(&self) -> Compression {
+        self.compression
+    }
+
+    fn write_compressed(&mut self, z: u8, x: u32, y: u32, data: &[u8]) -> Result<(), OutputError> {
         if self.created.insert((z, x)) {
             std::fs::create_dir_all(self.root.join(z.to_string()).join(x.to_string()))?;
         }
-        std::fs::write(self.tile_path(z, x, y), compress(data, self.compression))?;
+        std::fs::write(self.tile_path(z, x, y), data)?;
         Ok(())
     }
 
