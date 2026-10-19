@@ -163,6 +163,36 @@ describe("tiles", () => {
     }
   });
 
+  it("limits tiles to a bbox and gives the same tiles on any thread count", async () => {
+    const all = await generateTiles(fixture("town.osm.pbf"), { config, process: profile, threads: 1 }).toArray();
+    const again = await generateTiles(fixture("town.osm.pbf"), { config, process: profile, threads: 6 }).toArray();
+    expect(again.map((t) => `${t.z}/${t.x}/${t.y}:${t.data.toString("base64")}`)).toEqual(
+      all.map((t) => `${t.z}/${t.x}/${t.y}:${t.data.toString("base64")}`),
+    );
+    const near = await generateTiles(fixture("town.osm.pbf"), { config, process: profile, bbox: [9, 9, 11, 11] }).toArray();
+    // Only the bakery's tiles at high zoom remain.
+    expect(near.length).toBeLessThan(all.length);
+    expect(near.filter((t) => t.z === 12).every((t) => decode(t).layers["poi"]?.feature(0).properties["class"] === "bakery")).toBe(
+      true,
+    );
+    await expect(generateTiles(fixture("town.osm.pbf"), { config, process: profile, bbox: [1, 1, 0, 0] }).toArray()).rejects.toThrow(
+      /bbox/,
+    );
+  });
+
+  it("aborts while reading", async () => {
+    const ac = new AbortController();
+    const stream = generateTiles(fixture("grid.osm.pbf"), {
+      config,
+      process: profile,
+      signal: ac.signal,
+      onProgress: (p) => {
+        if (p.phase === "nodes") ac.abort(new Error("stop now"));
+      },
+    });
+    await expect(stream.toArray()).rejects.toThrow("stop now");
+  });
+
   it("reads config and profile from files", async () => {
     const dir = mkdtempSync(join(tmpdir(), "tilemaker-node-files-"));
     const { writeFileSync } = await import("node:fs");
