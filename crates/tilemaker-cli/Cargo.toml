@@ -1,0 +1,24 @@
+[package]
+name = "tilemaker-cli"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "tilemaker — make vector tiles from OpenStreetMap data (command line)."
+
+[[bin]]
+name = "tilemaker"
+path = "src/main.rs"
+
+[dependencies]
+tilemaker-pbf.workspace = true
+tilemaker-config.workspace = true
+tilemaker-core.workspace = true
+tilemaker-output.workspace = true
+tilemaker-export.workspace = true
+tilemaker-mvt.workspace = true
+rusqlite.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true

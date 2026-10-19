@@ -1,0 +1,13 @@
+[package]
+name = "tilemaker-geom"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "tilemaker — coordinates, tile maths, clipping, simplification and multipolygon assembly."
+
+[dependencies]
+geo.workspace = true
+polylabel.workspace = true
+rstar.workspace = true

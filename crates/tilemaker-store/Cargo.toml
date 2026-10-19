@@ -1,0 +1,13 @@
+[package]
+name = "tilemaker-store"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "tilemaker — id sets and node/way location stores for OpenStreetMap processing."
+
+[dependencies]
+tilemaker-geom.workspace = true
+memmap2.workspace = true
+thiserror.workspace = true

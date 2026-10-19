@@ -1,0 +1,185 @@
+{
+  "0": {
+    "tiles": 1,
+    "bytes": 110,
+    "features": {
+      "boundary": 1
+    }
+  },
+  "1": {
+    "tiles": 1,
+    "bytes": 116,
+    "features": {
+      "boundary": 1
+    }
+  },
+  "2": {
+    "tiles": 1,
+    "bytes": 128,
+    "features": {
+      "boundary": 1
+    }
+  },
+  "3": {
+    "tiles": 1,
+    "bytes": 265,
+    "features": {
+      "boundary": 2,
+      "place": 1
+    }
+  },
+  "4": {
+    "tiles": 1,
+    "bytes": 619,
+    "features": {
+      "boundary": 2,
+      "place": 1,
+      "transportation": 3
+    }
+  },
+  "5": {
+    "tiles": 1,
+    "bytes": 680,
+    "features": {
+      "boundary": 2,
+      "place": 1,
+      "transportation": 3
+    }
+  },
+  "6": {
+    "tiles": 1,
+    "bytes": 805,
+    "features": {
+      "boundary": 2,
+      "place": 1,
+      "transportation": 4
+    }
+  },
+  "7": {
+    "tiles": 1,
+    "bytes": 2609,
+    "features": {
+      "boundary": 2,
+      "landcover": 8,
+      "place": 3,
+      "transportation": 27
+    }
+  },
+  "8": {
+    "tiles": 2,
+    "bytes": 19370,
+    "features": {
+      "boundary": 5,
+      "landcover": 33,
+      "landuse": 408,
+      "place": 5,
+      "transportation": 30,
+      "transportation_name": 3,
+      "water": 4,
+      "waterway": 6
+    }
+  },
+  "9": {
+    "tiles": 2,
+    "bytes": 31077,
+    "features": {
+      "boundary": 5,
+      "landcover": 126,
+      "landuse": 439,
+      "place": 15,
+      "transportation": 57,
+      "transportation_name": 3,
+      "water": 4,
+      "waterway": 6
+    }
+  },
+  "10": {
+    "tiles": 4,
+    "bytes": 60913,
+    "features": {
+      "boundary": 7,
+      "landcover": 468,
+      "landuse": 443,
+      "place": 39,
+      "transportation": 81,
+      "transportation_name": 74,
+      "water": 11,
+      "waterway": 8
+    }
+  },
+  "11": {
+    "tiles": 6,
+    "bytes": 150497,
+    "features": {
+      "aeroway": 8,
+      "boundary": 12,
+      "landcover": 1344,
+      "landuse": 1345,
+      "mountain_peak": 82,
+      "park": 31,
+      "place": 45,
+      "transportation": 129,
+      "transportation_name": 170,
+      "water": 20,
+      "waterway": 11
+    }
+  },
+  "12": {
+    "tiles": 15,
+    "bytes": 389016,
+    "features": {
+      "aeroway": 8,
+      "boundary": 38,
+      "landcover": 2910,
+      "landuse": 1384,
+      "mountain_peak": 83,
+      "park": 36,
+      "place": 79,
+      "poi": 520,
+      "transportation": 422,
+      "transportation_name": 202,
+      "water": 48,
+      "waterway": 223
+    }
+  },
+  "13": {
+    "tiles": 45,
+    "bytes": 1485386,
+    "features": {
+      "aeroway": 8,
+      "boundary": 86,
+      "building": 537,
+      "landcover": 5335,
+      "landuse": 1441,
+      "mountain_peak": 83,
+      "park": 48,
+      "place": 332,
+      "poi": 528,
+      "transportation": 1682,
+      "transportation_name": 3047,
+      "water": 103,
+      "waterway": 329
+    }
+  },
+  "14": {
+    "tiles": 153,
+    "bytes": 4897823,
+    "features": {
+      "aeroway": 8,
+      "boundary": 354,
+      "building": 45838,
+      "housenumber": 8228,
+      "landcover": 8542,
+      "landuse": 1581,
+      "mountain_peak": 83,
+      "park": 65,
+      "place": 332,
+      "poi": 4699,
+      "transportation": 37152,
+      "transportation_name": 9125,
+      "water": 959,
+      "water_name": 1980,
+      "waterway": 1951
+    }
+  }
+}

@@ -1,0 +1,25 @@
+[package]
+name = "tilemaker-core"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "tilemaker — turn OpenStreetMap PBF files into vector tiles with a Lua profile and a JSON config."
+
+[dependencies]
+tilemaker-pbf.workspace = true
+tilemaker-geom.workspace = true
+tilemaker-store.workspace = true
+tilemaker-config.workspace = true
+tilemaker-lua.workspace = true
+tilemaker-mvt.workspace = true
+tilemaker-output.workspace = true
+geo.workspace = true
+rayon.workspace = true
+crossbeam-channel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]

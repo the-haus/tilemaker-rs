@@ -1,0 +1,7 @@
+{
+  "directory": ".",
+  "extracts": [
+    { "output": "monaco.osm.pbf", "bbox": [7.40, 43.72, 7.44, 43.76] },
+    { "output": "liechtenstein.osm.pbf", "bbox": [9.47, 47.04, 9.64, 47.27] }
+  ]
+}

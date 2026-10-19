@@ -1,0 +1,23 @@
+[package]
+name = "tilemaker-node"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+napi = { version = "2", default-features = false, features = ["napi6", "serde-json"] }
+napi-derive = "2"
+serde_json.workspace = true
+
+tilemaker-pbf.workspace = true
+tilemaker-export.workspace = true
+tilemaker-config.workspace = true
+tilemaker-core.workspace = true
+tilemaker-output.workspace = true
+
+[build-dependencies]
+napi-build = "2"

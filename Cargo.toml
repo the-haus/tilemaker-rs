@@ -1,0 +1,55 @@
+[workspace]
+members = [
+    "crates/tilemaker-geom",
+    "crates/tilemaker-pbf",
+    "crates/tilemaker-store",
+    "crates/tilemaker-config",
+    "crates/tilemaker-mvt",
+    "crates/tilemaker-output",
+    "crates/tilemaker-lua",
+    "crates/tilemaker-core",
+    "crates/tilemaker-export",
+    "crates/tilemaker-cli",
+    "crates/bindings/tilemaker-node",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "FTWPL"
+repository = "https://github.com/systemed/tilemaker"
+rust-version = "1.87"
+
+[workspace.dependencies]
+# Internal crates.
+tilemaker-geom = { path = "crates/tilemaker-geom" }
+tilemaker-pbf = { path = "crates/tilemaker-pbf" }
+tilemaker-store = { path = "crates/tilemaker-store" }
+tilemaker-config = { path = "crates/tilemaker-config" }
+tilemaker-mvt = { path = "crates/tilemaker-mvt" }
+tilemaker-output = { path = "crates/tilemaker-output" }
+tilemaker-lua = { path = "crates/tilemaker-lua" }
+tilemaker-core = { path = "crates/tilemaker-core" }
+tilemaker-export = { path = "crates/tilemaker-export" }
+
+# External crates.
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+flate2 = "1"
+rayon = "1"
+crossbeam-channel = "0.5"
+geo = "0.33"
+polylabel = "3"
+rstar = "0.12"
+mlua = { version = "0.12", features = ["vendored", "send"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+memmap2 = "0.9"
+clap = { version = "4", features = ["derive"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+debug = 1

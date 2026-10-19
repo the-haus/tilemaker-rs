@@ -1,0 +1,22 @@
+[package]
+name = "tilemaker-lua"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "tilemaker — the Lua tag-processing profile API (process.lua) on mlua."
+
+[features]
+default = ["luajit"]
+# LuaJIT, as tilemaker builds use in practice (Lua 5.1 semantics).
+luajit = ["mlua/luajit"]
+# Plain Lua 5.4 instead.
+lua54 = ["mlua/lua54"]
+
+[dependencies]
+mlua.workspace = true
+thiserror.workspace = true
+geo.workspace = true
+tilemaker-geom.workspace = true
+tilemaker-config.workspace = true

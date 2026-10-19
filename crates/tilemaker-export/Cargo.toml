@@ -1,0 +1,20 @@
+[package]
+name = "tilemaker-export"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "tilemaker — stream filtered OpenStreetMap elements and assembled features (points, lines, multipolygons) out of PBF files."
+keywords = ["openstreetmap", "osm", "pbf", "geojson", "streaming"]
+categories = ["science::geo"]
+
+[dependencies]
+tilemaker-pbf.workspace = true
+tilemaker-geom.workspace = true
+tilemaker-store.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]

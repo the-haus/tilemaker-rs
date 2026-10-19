@@ -1,0 +1,17 @@
+{
+  "name": "@tilemaker-rs/workspace",
+  "version": "0.0.0",
+  "private": true,
+  "description": "tilemaker-rs workspace: Rust crates and the Node.js binding.",
+  "license": "FTWPL",
+  "packageManager": "yarn@4.5.1",
+  "workspaces": [
+    "crates/bindings/tilemaker-node"
+  ],
+  "scripts": {
+    "build": "yarn workspaces foreach -A -pt run build",
+    "test": "yarn workspaces foreach -A -p run test",
+    "typecheck": "yarn workspaces foreach -A -p run typecheck",
+    "lint": "yarn workspaces foreach -A -p run lint"
+  }
+}

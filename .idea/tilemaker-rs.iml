@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="EMPTY_MODULE" version="4">
+  <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/crates/bindings/tilemaker-node/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/tilemaker-cli/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/tilemaker-config/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/tilemaker-core/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/tilemaker-export/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/tilemaker-geom/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/tilemaker-lua/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/tilemaker-mvt/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/tilemaker-output/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/tilemaker-pbf/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/tilemaker-store/src" isTestSource="false" />
+      <excludeFolder url="file://$MODULE_DIR$/target" />
+    </content>
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+  </component>
+</module>

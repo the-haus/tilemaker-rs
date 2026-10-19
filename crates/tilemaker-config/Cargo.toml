@@ -1,0 +1,13 @@
+[package]
+name = "tilemaker-config"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "tilemaker — config.json parsing (settings and layer definitions)."
+
+[dependencies]
+serde_json.workspace = true
+thiserror.workspace = true
+tilemaker-geom.workspace = true

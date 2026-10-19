@@ -1,0 +1,12 @@
+target/
+node_modules/
+fixtures/*.pbf
+fixtures/*.log
+*.mbtiles
+*.pmtiles
+.yarn/*
+!.yarn/releases
+.pnp.*
+fixtures/planet/
+fixtures/*.mbtiles
+fixtures/*.pmtiles
