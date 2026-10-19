@@ -41,6 +41,9 @@ enum Command {
         /// One line per tile instead of per zoom.
         #[arg(long)]
         tiles: bool,
+        /// With --tiles: also each layer's geometry size (u32 commands).
+        #[arg(long)]
+        detail: bool,
     },
 }
 
@@ -136,7 +139,12 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Command::Export(a)) => export(a),
-        Some(Command::Inspect { path, json, tiles }) => inspect(&path, json, tiles),
+        Some(Command::Inspect {
+            path,
+            json,
+            tiles,
+            detail,
+        }) => inspect(&path, json, tiles, detail),
         None => tiles(cli.tiles),
     }
 }
@@ -311,7 +319,7 @@ fn export(a: ExportArgs) -> Result<()> {
 }
 
 /// Per zoom: tiles, bytes, and per layer the number of features.
-fn inspect(path: &std::path::Path, json: bool, per_tile: bool) -> Result<()> {
+fn inspect(path: &std::path::Path, json: bool, per_tile: bool, detail: bool) -> Result<()> {
     use std::collections::BTreeMap;
     let mut tiles: Vec<(u8, u32, u32, Vec<u8>)> = Vec::new();
     match path.extension().and_then(|e| e.to_str()) {
@@ -350,7 +358,14 @@ fn inspect(path: &std::path::Path, json: bool, per_tile: bool) -> Result<()> {
             let ls: Vec<String> = t
                 .layers
                 .iter()
-                .map(|l| format!("{}={}", l.name, l.features.len()))
+                .map(|l| {
+                    if detail {
+                        let g: usize = l.features.iter().map(|f| f.geometry.len()).sum();
+                        format!("{}={}/{g}", l.name, l.features.len())
+                    } else {
+                        format!("{}={}", l.name, l.features.len())
+                    }
+                })
                 .collect();
             println!("{z}/{x}/{y}: {}", ls.join(" "));
         }
