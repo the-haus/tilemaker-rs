@@ -48,3 +48,6 @@ jobs:
       - run: corepack yarn run typecheck
       - run: corepack yarn run test
       - run: npm pack --dry-run
+      - name: install the tarball into a fresh project (ESM, CJS, TypeScript)
+        if: runner.os != 'Windows'
+        run: corepack yarn run smoke:install

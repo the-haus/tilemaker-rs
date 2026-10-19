@@ -7,3 +7,4 @@ LICENSE
 npm/
 artifacts/
 *.tgz
+CHANGELOG.md

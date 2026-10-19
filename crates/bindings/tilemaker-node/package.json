@@ -32,7 +32,10 @@
   },
   "files": [
     "dist/",
+    "examples/",
+    "tilemaker-node.*.node",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "publishConfig": {
@@ -71,9 +74,10 @@
     "bench": "node bench/run.mjs",
     "artifacts": "napi artifacts",
     "create-npm-dirs": "napi create-npm-dir -t .",
-    "copy-license": "node -e \"require('fs').copyFileSync('../../../LICENCE.txt','LICENSE')\"",
+    "copy-license": "node -e \"const fs=require('fs');fs.copyFileSync('../../../LICENCE.txt','LICENSE');fs.copyFileSync('../../../CHANGELOG.md','CHANGELOG.md')\"",
     "prepack": "yarn run copy-license && yarn run build",
-    "pack:dry": "npm pack --dry-run"
+    "pack:dry": "npm pack --dry-run",
+    "smoke:install": "bash scripts/smoke-install.sh"
   },
   "devDependencies": {
     "@mapbox/vector-tile": "^3.0.0",
