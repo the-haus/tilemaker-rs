@@ -25,6 +25,13 @@ First release.
 - GeoJSON helpers: `toGeoJSON`, `geometryToGeoJSON`, `geoJSONSeq`,
   `polygonRings`, `bbox`.
 
+### Verified
+
+- Feature export matches `osmium export` on the planet's administrative
+  boundaries (249,381 relations) and settlements (1,605,283 points).
+- Tiles match the C++ tilemaker with the OpenMapTiles profile to within
+  0.03% of features (Monaco, Liechtenstein, a 2.6 GB Netherlands extract).
+
 ### Rust / CLI
 
 - `tilemaker` with the C++ tool's arguments (`--input/--output/--config/
