@@ -273,7 +273,7 @@ impl PrimitiveBlock {
         while let Some((field, wire)) = r.field()? {
             match field {
                 1 => info.version = r.varint()? as i32,
-                2 => info.timestamp = r.int64()? * c.date_granularity / 1000,
+                2 => info.timestamp = r.int64()?.wrapping_mul(c.date_granularity) / 1000,
                 3 => info.changeset = r.int64()?,
                 4 => info.uid = r.varint()? as i32,
                 5 => user_sid = self.string_index(r.varint()?)?,
@@ -408,10 +408,10 @@ impl PrimitiveBlock {
         let (mut ts, mut cs, mut u, mut us) = (0i64, 0i64, 0i64, 0i64);
         let mut out = Vec::with_capacity(n);
         for i in 0..n {
-            ts += timestamp.get(i).copied().unwrap_or(0);
-            cs += changeset.get(i).copied().unwrap_or(0);
-            u += uid.get(i).copied().unwrap_or(0);
-            us += user.get(i).copied().unwrap_or(0);
+            ts = ts.wrapping_add(timestamp.get(i).copied().unwrap_or(0));
+            cs = cs.wrapping_add(changeset.get(i).copied().unwrap_or(0));
+            u = u.wrapping_add(uid.get(i).copied().unwrap_or(0));
+            us = us.wrapping_add(user.get(i).copied().unwrap_or(0));
             let user_sid = if us >= 0 && (us as usize) < self.strings.len() {
                 us as u32
             } else {
@@ -420,7 +420,7 @@ impl PrimitiveBlock {
             self.infos.push((
                 Info {
                     version: version.get(i).copied().unwrap_or(0),
-                    timestamp: ts * c.date_granularity / 1000,
+                    timestamp: ts.wrapping_mul(c.date_granularity) / 1000,
                     changeset: cs,
                     uid: u as i32,
                     visible: visible.get(i).copied().unwrap_or(true),
@@ -644,12 +644,12 @@ impl Coords {
     /// To 1e-7 degrees (OSM's usual fixed point).
     #[inline]
     fn lat(&self, raw: i64) -> i32 {
-        ((self.lat_offset + self.granularity * raw) / 100) as i32
+        (self.lat_offset.wrapping_add(self.granularity.wrapping_mul(raw)) / 100) as i32
     }
 
     #[inline]
     fn lon(&self, raw: i64) -> i32 {
-        ((self.lon_offset + self.granularity * raw) / 100) as i32
+        (self.lon_offset.wrapping_add(self.granularity.wrapping_mul(raw)) / 100) as i32
     }
 }
 

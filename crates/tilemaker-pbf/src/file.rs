@@ -227,29 +227,43 @@ impl PbfFile {
             });
         }
         // rank: 0 nodes, 1 ways, 2 relations; per block the min and max
-        // present. Both are non-decreasing in a sorted file.
-        let rank = |k: BlockKinds| -> (u8, u8) {
+        // present. Both are non-decreasing in a sorted file, except that a
+        // block with no elements (or only changesets) has no rank: if the
+        // search meets one, fall back to reading everything everywhere.
+        let rank = |k: BlockKinds| -> Option<(u8, u8)> {
             let present = [k.nodes, k.ways, k.relations];
-            let min = present.iter().position(|&p| p).unwrap_or(3) as u8;
-            let max = present.iter().rposition(|&p| p).map(|x| x as u8).unwrap_or(0);
-            (min, max)
+            let min = present.iter().position(|&p| p)? as u8;
+            let max = present.iter().rposition(|&p| p)? as u8;
+            Some((min, max))
         };
-        let first = |pred: &dyn Fn((u8, u8)) -> bool| -> Result<usize, Error> {
+        let whole = Layout {
+            nodes: 0..n,
+            ways: 0..n,
+            relations: 0..n,
+        };
+        let first = |pred: &dyn Fn((u8, u8)) -> bool| -> Result<Option<usize>, Error> {
             let (mut lo, mut hi) = (0usize, n);
             while lo < hi {
                 let mid = lo + (hi - lo) / 2;
-                if pred(rank(self.block_kinds(mid)?)) {
+                let Some(r) = rank(self.block_kinds(mid)?) else {
+                    return Ok(None);
+                };
+                if pred(r) {
                     hi = mid;
                 } else {
                     lo = mid + 1;
                 }
             }
-            Ok(lo)
+            Ok(Some(lo))
         };
-        let nodes_end = first(&|(min, _)| min > 0)?;
-        let ways_start = first(&|(_, max)| max >= 1)?;
-        let ways_end = first(&|(min, _)| min > 1)?;
-        let rels_start = first(&|(_, max)| max >= 2)?;
+        let (Some(nodes_end), Some(ways_start), Some(ways_end), Some(rels_start)) = (
+            first(&|(min, _)| min > 0)?,
+            first(&|(_, max)| max >= 1)?,
+            first(&|(min, _)| min > 1)?,
+            first(&|(_, max)| max >= 2)?,
+        ) else {
+            return Ok(whole);
+        };
         Ok(Layout {
             nodes: 0..nodes_end,
             ways: ways_start..ways_end.max(ways_start),

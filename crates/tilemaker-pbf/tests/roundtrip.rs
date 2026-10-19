@@ -325,3 +325,78 @@ fn missing_header_is_an_error() {
     std::fs::write(&path, b"").unwrap();
     assert!(matches!(PbfFile::open(&path), Err(Error::Corrupt(_))));
 }
+
+/// Frame a raw (uncompressed) blob.
+fn raw_blob(kind: &str, data: &[u8]) -> Vec<u8> {
+    fn varint(out: &mut Vec<u8>, mut v: u64) {
+        while v >= 0x80 {
+            out.push((v as u8) | 0x80);
+            v >>= 7;
+        }
+        out.push(v as u8);
+    }
+    let mut blob = vec![0x0a];
+    varint(&mut blob, data.len() as u64);
+    blob.extend_from_slice(data);
+    let mut header = vec![0x0a];
+    varint(&mut header, kind.len() as u64);
+    header.extend_from_slice(kind.as_bytes());
+    header.push(0x18);
+    varint(&mut header, blob.len() as u64);
+    let mut out = (header.len() as u32).to_be_bytes().to_vec();
+    out.extend(header);
+    out.extend(blob);
+    out
+}
+
+#[test]
+fn empty_blocks_do_not_break_the_layout() {
+    // A sorted file: node blocks, an empty block, more node blocks, ways.
+    let mut w = PbfWriter::with_options(
+        Vec::new(),
+        WriterOptions {
+            sorted: true,
+            ..Default::default()
+        },
+    );
+    for i in 1..=24_000i64 {
+        w.node(i, 0, 0, &[]).unwrap();
+    }
+    w.flush().unwrap();
+    let mut first = w.finish().unwrap();
+    // An empty PrimitiveBlock: just a string table with "".
+    first.extend(raw_blob("OSMData", &[0x0a, 0x02, 0x0a, 0x00]));
+    let mut w = PbfWriter::with_options(
+        Vec::new(),
+        WriterOptions {
+            sorted: true,
+            ..Default::default()
+        },
+    );
+    for i in 24_001..=40_000i64 {
+        w.node(i, 0, 0, &[]).unwrap();
+    }
+    w.way(1, &[1, 2], &[("highway", "x")]).unwrap();
+    let second = w.finish().unwrap();
+    // Drop the second file's header blob.
+    let hlen = u32::from_be_bytes(second[..4].try_into().unwrap()) as usize;
+    let mut r = BlobReader::new(Cursor::new(&second));
+    let (info, _) = r.next_blob().unwrap().unwrap();
+    let skip = 4 + hlen + info.size as usize;
+    first.extend_from_slice(&second[skip..]);
+
+    let path = temp_path("empty-block.osm.pbf");
+    std::fs::write(&path, &first).unwrap();
+    let file = PbfFile::open(&path).unwrap();
+    let layout = file.layout().unwrap();
+    let ways: usize = file
+        .blocks(layout.ways.clone(), DecodeOptions::ALL, 2)
+        .map(|b| b.unwrap().1.way_count())
+        .sum();
+    assert_eq!(ways, 1, "{layout:?}");
+    let nodes: usize = file
+        .blocks(layout.nodes.clone(), DecodeOptions::ALL, 2)
+        .map(|b| b.unwrap().1.node_count())
+        .sum();
+    assert_eq!(nodes, 40_000, "{layout:?}");
+}

@@ -624,3 +624,62 @@ fn elements_from_a_byte_stream() {
     .unwrap();
     assert!(stats.stopped && n > 0);
 }
+
+#[test]
+fn counters_respect_the_bbox() {
+    let path = town(sorted());
+    let opts = FeatureOptions {
+        common: CommonOptions {
+            bbox: Some([1.5, -1.0, 5.0, 5.0]),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let (fs, stats) = features(&path, &opts);
+    // Only the roundabout (2..3, 0..1) is in the box.
+    assert_eq!(fs.iter().map(|f| f.id).collect::<Vec<_>>(), vec![102]);
+    assert_eq!(
+        stats.points + stats.lines + stats.polygons + stats.multi_lines,
+        stats.emitted
+    );
+}
+
+#[test]
+fn element_bbox_uses_locations_on_ways() {
+    let path = temp("low-bbox.osm.pbf");
+    let mut w = PbfWriter::with_options(
+        Vec::new(),
+        WriterOptions {
+            sorted: true,
+            locations_on_ways: true,
+            ..Default::default()
+        },
+    );
+    w.way_full(
+        1,
+        &[1, 2],
+        &[(e7(1.0), e7(1.0)), (e7(1.5), e7(1.5))],
+        &[("highway", "x")],
+        None,
+    )
+    .unwrap();
+    // Crosses the box without a vertex inside it.
+    w.way_full(
+        2,
+        &[3, 4],
+        &[(e7(0.0), e7(9.0)), (e7(20.0), e7(11.0))],
+        &[("highway", "x")],
+        None,
+    )
+    .unwrap();
+    std::fs::write(&path, w.finish().unwrap()).unwrap();
+    let opts = ElementOptions {
+        common: CommonOptions {
+            bbox: Some([5.0, 5.0, 15.0, 15.0]),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let (es, _) = elements(&path, &opts);
+    assert_eq!(es.iter().map(|e| e.id).collect::<Vec<_>>(), vec![2]);
+}

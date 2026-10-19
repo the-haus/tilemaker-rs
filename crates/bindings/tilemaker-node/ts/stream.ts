@@ -13,6 +13,18 @@ import { OsmStreamError, type ExportStats, type Progress } from "./types.js";
 
 type Starter = (callback: (event: NativeEvent) => void) => NativeStream | Promise<NativeStream>;
 
+// A stream dropped without being finished (no close(), no end) is closed
+// when it is garbage-collected: the native callback only holds it weakly.
+const finalizer = new FinalizationRegistry<NativeStream>((n) => {
+  try {
+    n.close();
+    n.setRef(false);
+    n.release();
+  } catch {
+    /* already released */
+  }
+});
+
 interface Waiter<T> {
   resolve: (batch: T[] | null) => void;
   reject: (error: Error) => void;
@@ -79,6 +91,7 @@ export class OsmStream<T, S = ExportStats, P = Progress> implements AsyncIterabl
   #release(): void {
     if (!this.#native || this.#released) return;
     this.#released = true;
+    finalizer.unregister(this);
     this.#native.setRef(false);
     this.#native.release();
   }
@@ -86,6 +99,7 @@ export class OsmStream<T, S = ExportStats, P = Progress> implements AsyncIterabl
   #onEvent = (event: NativeEvent): void => {
     switch (event.type) {
       case "batch": {
+        if (this.#closed || this.#error) return;
         let records: T[];
         try {
           records = this.#decode(event.batch as never);
@@ -109,7 +123,12 @@ export class OsmStream<T, S = ExportStats, P = Progress> implements AsyncIterabl
         if (!this.#onProgress) return;
         const { type: _type, ...progress } = event;
         void _type;
-        this.#onProgress(progress as unknown as P);
+        try {
+          this.#onProgress(progress as unknown as P);
+        } catch (e) {
+          // A throwing callback fails the stream (rather than the process).
+          this.#fail(e instanceof Error ? e : new OsmStreamError(String(e)));
+        }
         return;
       }
       case "end":
@@ -153,6 +172,7 @@ export class OsmStream<T, S = ExportStats, P = Progress> implements AsyncIterabl
     if (this.#error) return;
     this.#error = error;
     this.#ended = true;
+    this.#queue.length = 0;
     this.#native?.close();
     for (const resolve of this.#drainWaiters.splice(0)) resolve();
     this.#release();
@@ -184,14 +204,28 @@ export class OsmStream<T, S = ExportStats, P = Progress> implements AsyncIterabl
       this.#abort();
       return;
     }
+    const weak = new WeakRef(this);
+    const callback = (event: NativeEvent): void => {
+      const stream = weak.deref();
+      if (stream) stream.#onEvent(event);
+    };
     try {
-      this.#native = await this.#start(this.#onEvent);
+      this.#native = await this.#start(callback);
     } catch (e) {
       this.#fail(new OsmStreamError(e instanceof Error ? e.message : String(e)));
       return;
     }
-    this.#signal?.addEventListener("abort", this.#abort, { once: true });
-    if (this.#closed) this.#native.close();
+    finalizer.register(this, this.#native, this);
+    if (this.#signal?.aborted) {
+      // Aborted while starting (opening the file, reading the config).
+      this.#abort();
+      return;
+    }
+    if (this.#closed) {
+      this.#native.close();
+    } else {
+      this.#signal?.addEventListener("abort", this.#abort, { once: true });
+    }
     this.#updateRef();
   }
 

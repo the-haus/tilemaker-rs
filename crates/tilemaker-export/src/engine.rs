@@ -61,7 +61,8 @@ pub enum NodeStorage {
     /// Compressed, in memory (about 10 bytes per stored node).
     #[default]
     Memory,
-    /// A dense memory-mapped sparse file at this path (removed afterwards):
+    /// A dense memory-mapped sparse file at this path, which must not exist
+    /// yet (it never outlives the export):
     /// best when hundreds of millions of nodes are needed.
     DenseFile(std::path::PathBuf),
 }
@@ -75,7 +76,10 @@ pub struct CommonOptions {
     pub tags: TagSelection,
     /// Emit metadata (version, timestamp, changeset, user).
     pub metadata: bool,
-    /// Only emit what intersects `[west, south, east, north]`.
+    /// Only emit what intersects `[west, south, east, north]`. Element
+    /// exports apply it to nodes, and to ways whose coordinates are known
+    /// (`way_locations`, or files with `LocationsOnWays`); relations are not
+    /// filtered.
     pub bbox: Option<[f64; 4]>,
     /// Worker threads (0: all cores).
     pub threads: usize,
@@ -223,7 +227,8 @@ pub struct ExportStats {
     pub stored_nodes: u64,
     /// Way geometries stored.
     pub stored_ways: u64,
-    /// Approximate bytes held by the stores at their peak.
+    /// Approximate bytes held by the location stores at their peak (the
+    /// in-memory stores; a dense node store file is not counted).
     pub store_bytes: u64,
     /// Whether the sink stopped the export early.
     pub stopped: bool,
@@ -445,7 +450,7 @@ pub fn export_features(
         if refs_mode {
             let store = b.freeze();
             stats.stored_ways = store.len() as u64;
-            stats.store_bytes = store.heap_bytes() as u64;
+            stats.store_bytes += store.heap_bytes() as u64;
             *shared.ref_store.write().unwrap() = Some(store);
         }
     }
@@ -537,6 +542,11 @@ pub fn export_features(
                     let meta = if s.metadata { Meta::from_ref(w.info()) } else { None };
                     let mut emit = |geometry: Geometry, tags: Vec<(String, String)>| {
                         if s.in_bbox(geometry.bbox()) {
+                            let c = match geometry.kind {
+                                GeometryType::MultiPolygon => &s.counters.polygons,
+                                _ => &s.counters.lines,
+                            };
+                            s.counters.add(c, 1);
                             out.push(Feature {
                                 kind: ElementType::Way,
                                 id: w.id(),
@@ -554,11 +564,9 @@ pub fn export_features(
                             polygons: vec![1],
                         };
                         orient_ring_ccw(&mut g.coords);
-                        s.counters.add(&s.counters.polygons, 1);
                         emit(g, tags.clone());
                     }
                     if line {
-                        s.counters.add(&s.counters.lines, 1);
                         emit(
                             Geometry {
                                 kind: GeometryType::LineString,
@@ -624,10 +632,14 @@ pub fn export_features(
                         missing = true;
                     }
                 }
-                if missing || ways.is_empty() {
+                if missing {
                     // Like osmium: an incomplete relation (e.g. cut by an
                     // extract's edge) yields nothing rather than a partial shape.
                     s.counters.add(&s.counters.relations_missing_ways, 1);
+                    continue;
+                }
+                if ways.is_empty() {
+                    // No way members at all: nothing to draw.
                     continue;
                 }
                 let refs: Vec<&[LatpLon]> = ways.iter().map(|w| w.as_slice()).collect();
@@ -637,14 +649,12 @@ pub fn export_features(
                         s.counters.add(&s.counters.invalid_areas, 1);
                         continue;
                     }
-                    s.counters.add(&s.counters.polygons, 1);
                     multipolygon_geometry(&a.multipolygon)
                 } else {
                     let runs = merge_ways(&refs);
                     if runs.is_empty() {
                         continue;
                     }
-                    s.counters.add(&s.counters.multi_lines, 1);
                     let mut g = Geometry {
                         kind: GeometryType::MultiLineString,
                         coords: Vec::new(),
@@ -661,6 +671,11 @@ pub fn export_features(
                 if !s.in_bbox(geometry.bbox()) {
                     continue;
                 }
+                let c = match geometry.kind {
+                    GeometryType::MultiPolygon => &s.counters.polygons,
+                    _ => &s.counters.multi_lines,
+                };
+                s.counters.add(c, 1);
                 out.push(Feature {
                     kind: ElementType::Relation,
                     id: r.id(),
@@ -716,7 +731,8 @@ fn freeze_ways(shared: &Shared, stats: &mut ExportStats) {
     if let Some(b) = shared.ways.write().unwrap().take() {
         let store = b.freeze();
         stats.stored_ways = stats.stored_ways.max(store.len() as u64);
-        stats.store_bytes = stats.store_bytes.max(store.heap_bytes() as u64);
+        // The node store is alive while ways are stored: their sum is the peak.
+        stats.store_bytes += store.heap_bytes() as u64;
         *shared.way_store.write().unwrap() = Some(store);
     }
 }
@@ -1213,6 +1229,17 @@ impl ElemShared {
         }
     }
 
+    /// Whether `[lon, lat, …]` (NaN for unknown nodes) intersects the bbox:
+    /// its bounding box overlaps it, as for features.
+    fn coords_in_bbox(&self, v: &[f64]) -> bool {
+        let Some(f) = self.bbox else { return true };
+        let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+        for c in v.chunks_exact(2).filter(|c| c[0].is_finite()) {
+            b = [b[0].min(c[0]), b[1].min(c[1]), b[2].max(c[0]), b[3].max(c[1])];
+        }
+        b[0].is_finite() && !(b[2] < f[0] || b[0] > f[2] || b[3] < f[1] || b[1] > f[3])
+    }
+
     fn way_selected(&self, w: &Way<'_>) -> bool {
         let closed = Shared::way_is_closed(w);
         let area = closed && crate::area::is_area_by_tags(&w.tags());
@@ -1266,11 +1293,23 @@ impl ElemShared {
                     })
                     .collect()
             };
-            if self.bbox.is_some() && !v.chunks_exact(2).any(|c| self.in_bbox(c[0], c[1])) {
+            if !self.coords_in_bbox(&v) {
                 return None;
             }
             Some(v)
         } else {
+            // Without wayLocations a way can still be placed when the file
+            // carries its locations.
+            let l = w.locations();
+            if self.bbox.is_some() && !l.is_empty() {
+                let v: Vec<f64> = l
+                    .iter()
+                    .flat_map(|&(lat, lon)| [lon as f64 / 1e7, lat as f64 / 1e7])
+                    .collect();
+                if !self.coords_in_bbox(&v) {
+                    return None;
+                }
+            }
             None
         };
         Some(Element {

@@ -74,13 +74,25 @@ impl RefStoreBuilder {
         let sorted = chunks
             .windows(2)
             .all(|w| w[0].index.last().unwrap().0 < w[1].index[0].0);
-        RefStore { chunks, sorted }
+        let mut global = Vec::new();
+        if !sorted {
+            for (c, chunk) in chunks.iter().enumerate() {
+                global.extend(chunk.index.iter().map(|&(id, at)| (id, c as u32, at)));
+            }
+            // Stable: of duplicate ids the earliest chunk wins.
+            global.sort_by_key(|e| e.0);
+            global.dedup_by_key(|e| e.0);
+        }
+        RefStore { chunks, global, sorted }
     }
 }
 
 /// Way id → node ids.
 pub struct RefStore {
     chunks: Vec<Chunk>,
+    /// For unsorted input (chunk id ranges overlap): every way's
+    /// (id, chunk, offset), sorted by id, so lookups stay a binary search.
+    global: Vec<(i64, u32, u32)>,
     sorted: bool,
 }
 
@@ -115,13 +127,14 @@ impl RefStore {
             }
             false
         } else {
-            for c in &self.chunks {
-                if let Some(at) = find(c) {
-                    decode(c, at, out);
-                    return true;
+            match self.global.binary_search_by(|e| e.0.cmp(&id)) {
+                Ok(j) => {
+                    let (_, c, at) = self.global[j];
+                    decode(&self.chunks[c as usize], at, out);
+                    true
                 }
+                Err(_) => false,
             }
-            false
         }
     }
 
@@ -137,7 +150,11 @@ impl RefStore {
 
     /// Approximate heap bytes used.
     pub fn heap_bytes(&self) -> usize {
-        self.chunks.iter().map(|c| c.index.len() * 16 + c.data.len()).sum()
+        self.chunks
+            .iter()
+            .map(|c| c.index.len() * 16 + c.data.len())
+            .sum::<usize>()
+            + self.global.len() * 16
     }
 }
 

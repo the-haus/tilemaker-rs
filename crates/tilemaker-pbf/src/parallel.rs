@@ -4,6 +4,10 @@
 //! transformed on a pool of workers, and handed back in their original
 //! order. At most `window` items are in flight or waiting to be consumed, so
 //! a slow consumer slows the producer instead of buffering the whole input.
+//!
+//! A panic in `f` is caught on the worker and re-raised on the consumer's
+//! thread when its turn comes, rather than leaving a gap that would hang
+//! or silently end the iteration.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,9 +22,11 @@ pub fn default_threads() -> usize {
 }
 
 /// An iterator over results in input order (see the module docs).
+type Outcome<R> = std::thread::Result<R>;
+
 pub struct OrderedMap<R> {
-    results: Receiver<(usize, R)>,
-    pending: BTreeMap<usize, R>,
+    results: Receiver<(usize, Outcome<R>)>,
+    pending: BTreeMap<usize, Outcome<R>>,
     next: usize,
     permits: Option<Receiver<()>>,
     cancel: Arc<AtomicBool>,
@@ -39,7 +45,7 @@ where
     let window = window.max(threads);
     let (permit_tx, permit_rx) = bounded::<()>(window);
     let (work_tx, work_rx) = unbounded::<(usize, T)>();
-    let (res_tx, res_rx) = unbounded::<(usize, R)>();
+    let (res_tx, res_rx) = unbounded::<(usize, Outcome<R>)>();
     let cancel = Arc::new(AtomicBool::new(false));
 
     let items = items.into_iter();
@@ -63,7 +69,8 @@ where
                     if cancel.load(Ordering::Relaxed) {
                         break;
                     }
-                    if res_tx.send((seq, f(item))).is_err() {
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(item)));
+                    if res_tx.send((seq, outcome)).is_err() {
                         break;
                     }
                 }
@@ -100,7 +107,10 @@ impl<R> Iterator for OrderedMap<R> {
                 if let Some(p) = &self.permits {
                     let _ = p.try_recv();
                 }
-                return Some(r);
+                match r {
+                    Ok(r) => return Some(r),
+                    Err(payload) => std::panic::resume_unwind(payload),
+                }
             }
             match self.results.recv() {
                 Ok((seq, r)) => {
@@ -154,6 +164,23 @@ mod tests {
             "{}",
             produced.load(Ordering::SeqCst)
         );
+    }
+
+    #[test]
+    fn worker_panics_reach_the_consumer() {
+        for (n, window) in [(10u64, 32usize), (1000, 8)] {
+            let r = std::panic::catch_unwind(|| {
+                ordered_map(0..n, 2, window, |i| {
+                    if i == 3 {
+                        panic!("boom");
+                    }
+                    i
+                })
+                .collect::<Vec<_>>()
+            });
+            let err = r.unwrap_err();
+            assert_eq!(err.downcast_ref::<&str>(), Some(&"boom"));
+        }
     }
 
     #[test]

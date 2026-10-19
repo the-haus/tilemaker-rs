@@ -107,6 +107,15 @@ pub struct NativeStream {
     pub(crate) input: std::sync::Mutex<Option<crate::input::InputSender>>,
 }
 
+impl Drop for NativeStream {
+    // Collected without being finished (JS dropped the stream): stop the
+    // producer so it does not wait for credits forever.
+    fn drop(&mut self) {
+        self.credits.close();
+        self.input.lock().unwrap().take();
+    }
+}
+
 impl NativeStream {
     pub(crate) fn new(credits: Arc<Credits>, callback: Callback) -> Self {
         Self {
@@ -290,7 +299,8 @@ where
                 wrap,
                 last_progress: None,
             };
-            let result = job(&mut |e| sender.on_event(e));
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&mut |e| sender.on_event(e))))
+                .unwrap_or_else(|p| Err(format!("internal error: {}", panic_message(&p))));
             let result = result.map(|mut stats| {
                 if sender.flush() == Flow::Stop {
                     stats.stopped = true;
@@ -305,4 +315,12 @@ where
         })
         .expect("spawn export thread");
     handle
+}
+
+/// The message of a caught panic.
+pub(crate) fn panic_message(p: &(dyn std::any::Any + Send)) -> String {
+    p.downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| p.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "a worker thread panicked".into())
 }

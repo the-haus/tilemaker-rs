@@ -209,7 +209,8 @@ Passes that can select nothing are skipped, and sorted files let each pass
 decode only the blocks holding its element type. For selections that need
 hundreds of millions of nodes, `nodeStoreFile: "/tmp/nodes.bin"` keeps node
 locations in a sparse, memory-mapped file (8 bytes per possible id, only
-touched pages use disk; removed afterwards) instead of RAM.
+touched pages use disk; the path must not exist and nothing is left
+behind) instead of RAM.
 
 ## Errors
 

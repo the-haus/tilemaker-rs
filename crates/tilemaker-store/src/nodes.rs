@@ -9,8 +9,10 @@
 //! osmium's `dense_mmap_array` does: constant-time lookups and no per-node
 //! overhead, best when a large share of a planet's nodes is needed.
 
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use memmap2::MmapMut;
@@ -165,16 +167,58 @@ const LAT_BIAS: i64 = 1_000_000_000;
 const DENSE_MAX_ID: u64 = 1 << 35;
 
 struct DenseFile {
-    map: MmapMut,
-    path: PathBuf,
-    remove_on_drop: bool,
+    /// The mapping viewed as one atomic slot per id. Points into `_map`,
+    /// which lives as long as this struct and is never touched otherwise.
+    slots: *const AtomicU64,
+    /// Ids outside the slots' range (negative, or ≥ 2^35).
+    others: Mutex<HashMap<i64, Location>>,
+    /// Locations written (duplicates count twice).
+    written: std::sync::atomic::AtomicUsize,
+    _map: MmapMut,
+    /// Where the file is, when it could not be unlinked while open
+    /// (Windows): removed on drop.
+    remove_on_drop: Option<PathBuf>,
     _file: File,
+}
+
+// SAFETY: `slots` points into the mapping owned by the same struct and is
+// only accessed through atomics.
+unsafe impl Send for DenseFile {}
+unsafe impl Sync for DenseFile {}
+
+impl DenseFile {
+    #[inline]
+    fn slots(&self) -> &[AtomicU64] {
+        // SAFETY: `slots` was derived from the whole (page-aligned) mapping
+        // through `&mut`, and the mapping outlives `self`.
+        unsafe { std::slice::from_raw_parts(self.slots, DENSE_MAX_ID as usize) }
+    }
+
+    fn set(&self, id: i64, loc: Location) {
+        if id < 0 || id as u64 >= DENSE_MAX_ID {
+            self.others.lock().unwrap().insert(id, loc);
+            return;
+        }
+        let v = (((loc.0 as i64 + LAT_BIAS) as u64) << 32) | (loc.1 as u32 as u64);
+        self.slots()[id as usize].store(v, Ordering::Relaxed);
+    }
+
+    fn get(&self, id: i64) -> Option<Location> {
+        if id < 0 || id as u64 >= DENSE_MAX_ID {
+            return self.others.lock().unwrap().get(&id).copied();
+        }
+        let v = self.slots()[id as usize].load(Ordering::Relaxed);
+        if v == 0 {
+            return None;
+        }
+        Some((((v >> 32) as i64 - LAT_BIAS) as i32, v as u32 as i32))
+    }
 }
 
 impl Drop for DenseFile {
     fn drop(&mut self) {
-        if self.remove_on_drop {
-            let _ = std::fs::remove_file(&self.path);
+        if let Some(p) = self.remove_on_drop.take() {
+            let _ = std::fs::remove_file(p);
         }
     }
 }
@@ -204,20 +248,10 @@ impl NodeStoreBuilder {
                 chunks.lock().unwrap().push(chunk);
             }
             BuilderKind::Dense(d) => {
-                let base = d.map.as_ptr() as *mut u64;
-                for &(id, (lat, lon)) in batch.iter() {
-                    if id < 0 || id as u64 >= DENSE_MAX_ID {
-                        return Err(StoreError::OutOfRange(id));
-                    }
-                    let v = (((lat as i64 + LAT_BIAS) as u64) << 32) | (lon as u32 as u64);
-                    // SAFETY: in bounds (checked above); distinct ids are
-                    // distinct slots, and a slot written twice gets the same
-                    // node's location, so racing writers cannot tear a value
-                    // into something meaningful-but-wrong beyond what a
-                    // duplicate node in the input would do. Readers only run
-                    // after `freeze`.
-                    unsafe { base.add(id as usize).write_unaligned(v.to_le()) };
+                for &(id, loc) in batch.iter() {
+                    d.set(id, loc);
                 }
+                d.written.fetch_add(batch.len(), Ordering::Relaxed);
             }
         }
         Ok(())
@@ -267,28 +301,43 @@ impl NodeStore {
         }
     }
 
-    /// A builder for a dense store in a (sparse) file at `path`, removed
-    /// when the store is dropped. Needs a 64-bit platform and a filesystem
-    /// with sparse files (APFS, ext4, XFS, NTFS); disk use is about 8 bytes
-    /// per page-sized run of ids actually touched.
+    /// A builder for a dense store in a new (sparse) file at `path`, which
+    /// must not exist yet. On Unix the file is unlinked as soon as it is
+    /// mapped (nothing is left behind, even after a crash); elsewhere it is
+    /// removed when the store is dropped. Needs a 64-bit platform and a
+    /// filesystem with sparse files (APFS, ext4, XFS, NTFS); disk use is
+    /// about one page per run of ids actually touched.
     pub fn dense_file(path: impl AsRef<Path>) -> Result<NodeStoreBuilder, StoreError> {
         let path = path.as_ref().to_path_buf();
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)?;
-        make_sparse(&file)?;
-        file.set_len(DENSE_MAX_ID * 8)?;
-        // SAFETY: the file is private to this store (created and truncated
-        // above, removed on drop); nothing else maps or resizes it.
-        let map = unsafe { MmapMut::map_mut(&file)? };
+        let file = OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
+        let setup = || -> Result<MmapMut, StoreError> {
+            make_sparse(&file)?;
+            file.set_len(DENSE_MAX_ID * 8)?;
+            // SAFETY: the file was just created by us; nothing else maps
+            // or resizes it.
+            Ok(unsafe { MmapMut::map_mut(&file)? })
+        };
+        let mut map = match setup() {
+            Ok(m) => m,
+            Err(e) => {
+                let _ = std::fs::remove_file(&path);
+                return Err(e);
+            }
+        };
+        let remove_on_drop = if cfg!(unix) {
+            std::fs::remove_file(&path)?;
+            None
+        } else {
+            Some(path)
+        };
+        let slots = map.as_mut_ptr() as *const AtomicU64;
         Ok(NodeStoreBuilder {
             kind: BuilderKind::Dense(DenseFile {
-                map,
-                path,
-                remove_on_drop: true,
+                slots,
+                others: Mutex::new(HashMap::new()),
+                written: std::sync::atomic::AtomicUsize::new(0),
+                _map: map,
+                remove_on_drop,
                 _file: file,
             }),
         })
@@ -310,31 +359,19 @@ impl NodeStore {
                 }
                 c.get(id)
             }
-            StoreKind::Dense(d) => {
-                if id < 0 || id as u64 >= DENSE_MAX_ID {
-                    return None;
-                }
-                let at = id as usize * 8;
-                let v = u64::from_le_bytes(d.map[at..at + 8].try_into().unwrap());
-                if v == 0 {
-                    return None;
-                }
-                let lat = ((v >> 32) as i64 - LAT_BIAS) as i32;
-                let lon = v as u32 as i32;
-                Some((lat, lon))
-            }
+            StoreKind::Dense(d) => d.get(id),
         }
     }
 
-    /// Number of nodes held (in-memory stores only; 0 for dense files).
+    /// Number of nodes held (for a dense file: locations written).
     pub fn len(&self) -> usize {
         match &self.kind {
             StoreKind::Memory { chunks, .. } => chunks.iter().map(|c| c.locs.len()).sum(),
-            StoreKind::Dense(_) => 0,
+            StoreKind::Dense(d) => d.written.load(Ordering::Relaxed),
         }
     }
 
-    /// Whether the store is empty (in-memory stores only).
+    /// Whether the store is empty.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -405,12 +442,19 @@ mod tests {
     #[test]
     fn dense_file_store() {
         let path = std::env::temp_dir().join(format!("tilemaker-dense-{}.bin", std::process::id()));
-        let ids = vec![0, 1, 77, 1_000_000, 14_274_176_831];
+        let _ = std::fs::remove_file(&path);
+        let ids = vec![0, 1, 77, 1_000_000, 14_274_176_831, -5, 1 << 40];
         let store = fill(NodeStore::dense_file(&path).unwrap(), &ids);
         check(&store, &ids);
         assert_eq!(store.get(2), None);
         assert_eq!(store.get(-1), None);
+        // An existing file is never overwritten.
+        std::fs::write(path.with_extension("keep"), b"precious").unwrap();
+        assert!(NodeStore::dense_file(path.with_extension("keep")).is_err());
+        assert_eq!(std::fs::read(path.with_extension("keep")).unwrap(), b"precious");
+        let _ = std::fs::remove_file(path.with_extension("keep"));
         // Location (−90°, 0) round-trips (not confused with "absent").
+        let _ = std::fs::remove_file(path.with_extension("2"));
         let b = NodeStore::dense_file(path.with_extension("2")).unwrap();
         b.insert(&mut vec![(5, (-900_000_000, 0))]).unwrap();
         let s = b.freeze();

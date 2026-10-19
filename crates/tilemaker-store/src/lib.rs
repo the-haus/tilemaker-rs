@@ -27,7 +27,4 @@ pub enum StoreError {
     /// An I/O error (dense file store).
     #[error("node store I/O error: {0}")]
     Io(#[from] std::io::Error),
-    /// An id outside the store's range.
-    #[error("id {0} is outside the dense node store's range")]
-    OutOfRange(i64),
 }

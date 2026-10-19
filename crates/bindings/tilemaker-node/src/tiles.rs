@@ -188,28 +188,32 @@ pub(crate) fn spawn_tiles(
                 );
                 Flow::Continue
             };
-            let result = generate(&file, &p.config, &p.profile, &p.name, &p.opts, |e| {
-                if credits.is_closed() {
-                    return Flow::Stop;
-                }
-                match e {
-                    Event::Tile(t) => {
-                        let data = tilemaker_output::compress(&t.data, p.compression);
-                        batch.push(t.z, t.x, t.y, &data);
-                        if batch.len() >= batch_size || batch.data.len() >= MAX_BATCH_BYTES {
-                            return flush(&mut batch);
-                        }
-                        Flow::Continue
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                generate(&file, &p.config, &p.profile, &p.name, &p.opts, |e| {
+                    if credits.is_closed() {
+                        return Flow::Stop;
                     }
-                    Event::Progress(pr) => {
-                        let (key, finished) = progress_key(&pr);
-                        if progress_due(&mut last, key, finished) {
-                            cb.call(StreamEvent::TileProgress(pr), ThreadsafeFunctionCallMode::NonBlocking);
+                    match e {
+                        Event::Tile(t) => {
+                            let data = tilemaker_output::compress(&t.data, p.compression);
+                            batch.push(t.z, t.x, t.y, &data);
+                            if batch.len() >= batch_size || batch.data.len() >= MAX_BATCH_BYTES {
+                                return flush(&mut batch);
+                            }
+                            Flow::Continue
                         }
-                        Flow::Continue
+                        Event::Progress(pr) => {
+                            let (key, finished) = progress_key(&pr);
+                            if progress_due(&mut last, key, finished) {
+                                cb.call(StreamEvent::TileProgress(pr), ThreadsafeFunctionCallMode::NonBlocking);
+                            }
+                            Flow::Continue
+                        }
                     }
-                }
-            });
+                })
+                .map_err(|e| e.to_string())
+            }))
+            .unwrap_or_else(|p| Err(format!("internal error: {}", crate::stream::panic_message(&p))));
             let event = match result {
                 Ok((mut stats, meta)) => {
                     if flush(&mut batch) == Flow::Stop {
@@ -217,7 +221,7 @@ pub(crate) fn spawn_tiles(
                     }
                     end_event(&stats, Some(&meta))
                 }
-                Err(e) => StreamEvent::Error(e.to_string()),
+                Err(e) => StreamEvent::Error(e),
             };
             cb.call(event, ThreadsafeFunctionCallMode::Blocking);
         })
@@ -255,7 +259,9 @@ pub(crate) fn spawn_write(file: PbfFile, p: Prepared, output: String, cb: Callba
                 .map_err(|e| e.to_string())?;
                 Ok(end_event(&stats, Some(&meta)))
             };
-            let event = run().unwrap_or_else(StreamEvent::Error);
+            let event = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run))
+                .unwrap_or_else(|p| Err(format!("internal error: {}", crate::stream::panic_message(&p))))
+                .unwrap_or_else(StreamEvent::Error);
             cb.call(event, ThreadsafeFunctionCallMode::Blocking);
         })
         .expect("spawn write thread");

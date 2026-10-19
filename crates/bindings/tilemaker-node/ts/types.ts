@@ -18,7 +18,9 @@ export interface Meta {
 
 /**
  * Geometries keep their coordinates flat: `[lon, lat, lon, lat, …]` in a
- * `Float64Array` (a zero-copy view into the batch that carried it).
+ * `Float64Array` — a zero-copy view into the batch that carried it, so
+ * holding on to one feature keeps its whole batch's buffer alive. To keep a
+ * few features out of many, copy them (`new Float64Array(g.coordinates)`).
  * Use {@link toGeoJSON} / {@link geometryToGeoJSON} for nested arrays.
  */
 export interface PointGeometry {
@@ -248,14 +250,19 @@ export interface CommonOptions {
   tags?: boolean | string[];
   /** Include version, timestamp, changeset, uid and user. */
   metadata?: boolean;
-  /** Only what intersects `[west, south, east, north]`. */
+  /**
+   * Only what intersects `[west, south, east, north]`. For elements: nodes,
+   * and ways whose coordinates are known (`wayLocations`, or files with
+   * `LocationsOnWays`); relations are not filtered.
+   */
   bbox?: [number, number, number, number];
   /** Decoding threads (default: all cores). */
   threads?: number;
   /**
    * Keep node locations in a dense on-disk (sparse, memory-mapped) file at
    * this path instead of compressed in memory: for planet-scale selections
-   * that need hundreds of millions of nodes. The file is removed afterwards.
+   * that need hundreds of millions of nodes. The file must not exist yet; it is
+   * removed (on Unix, unlinked as soon as it is mapped).
    */
   nodeStoreFile?: string;
   /** Records per batch (default 4096). */

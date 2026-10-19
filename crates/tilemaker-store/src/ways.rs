@@ -77,13 +77,25 @@ impl WayStoreBuilder {
         let sorted = chunks
             .windows(2)
             .all(|w| w[0].index.last().unwrap().0 < w[1].index[0].0);
-        WayStore { chunks, sorted }
+        let mut global = Vec::new();
+        if !sorted {
+            for (c, chunk) in chunks.iter().enumerate() {
+                global.extend(chunk.index.iter().map(|&(id, at)| (id, c as u32, at)));
+            }
+            // Stable: of duplicate ids the earliest chunk wins.
+            global.sort_by_key(|e| e.0);
+            global.dedup_by_key(|e| e.0);
+        }
+        WayStore { chunks, global, sorted }
     }
 }
 
 /// Way id → locations.
 pub struct WayStore {
     chunks: Vec<Chunk>,
+    /// For unsorted input (chunk id ranges overlap): every way's
+    /// (id, chunk, offset), sorted by id, so lookups stay a binary search.
+    global: Vec<(i64, u32, u32)>,
     /// Whether chunk id ranges are disjoint (one binary search suffices).
     sorted: bool,
 }
@@ -93,6 +105,7 @@ impl WayStore {
     pub fn empty() -> Self {
         Self {
             chunks: Vec::new(),
+            global: Vec::new(),
             sorted: true,
         }
     }
@@ -130,13 +143,14 @@ impl WayStore {
             }
             false
         } else {
-            for c in &self.chunks {
-                if let Ok(j) = c.index.binary_search_by(|e| e.0.cmp(&id)) {
-                    decode(c, c.index[j].1, out);
-                    return true;
+            match self.global.binary_search_by(|e| e.0.cmp(&id)) {
+                Ok(j) => {
+                    let (_, c, at) = self.global[j];
+                    decode(&self.chunks[c as usize], at, out);
+                    true
                 }
+                Err(_) => false,
             }
-            false
         }
     }
 
@@ -158,7 +172,11 @@ impl WayStore {
 
     /// Approximate heap bytes used.
     pub fn heap_bytes(&self) -> usize {
-        self.chunks.iter().map(|c| c.index.len() * 16 + c.data.len()).sum()
+        self.chunks
+            .iter()
+            .map(|c| c.index.len() * 16 + c.data.len())
+            .sum::<usize>()
+            + self.global.len() * 16
     }
 }
 

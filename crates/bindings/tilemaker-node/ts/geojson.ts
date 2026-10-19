@@ -70,14 +70,19 @@ export function polygonRings(g: MultiPolygonGeometry): Array<Array<[number, numb
  * (like `osmium export -a type,id`), and metadata as `@version`, … when present.
  */
 export function toGeoJSON(f: Feature): GeoJSONFeature {
-  const properties: Record<string, unknown> = { "@type": f.type, "@id": f.id };
-  for (const k of Object.keys(f.tags)) properties[k] = f.tags[k];
+  const properties: Record<string, unknown> = {};
+  const set = (k: string, v: unknown) =>
+    Object.defineProperty(properties, k, { value: v, enumerable: true, writable: true, configurable: true });
+  for (const k of Object.keys(f.tags)) set(k, f.tags[k]);
+  // The generated fields win over tags of the same name.
+  set("@type", f.type);
+  set("@id", f.id);
   if (f.meta) {
-    properties["@version"] = f.meta.version;
-    properties["@timestamp"] = new Date(f.meta.timestamp * 1000).toISOString();
-    properties["@changeset"] = f.meta.changeset;
-    properties["@uid"] = f.meta.uid;
-    properties["@user"] = f.meta.user;
+    set("@version", f.meta.version);
+    set("@timestamp", new Date(f.meta.timestamp * 1000).toISOString());
+    set("@changeset", f.meta.changeset);
+    set("@uid", f.meta.uid);
+    set("@user", f.meta.user);
   }
   return { type: "Feature", id: `${f.type}/${f.id}`, properties, geometry: geometryToGeoJSON(f.geometry) };
 }
