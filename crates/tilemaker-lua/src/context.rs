@@ -78,6 +78,10 @@ pub(crate) struct Context {
     line: Option<Arc<LineString>>,
     polygon: Option<Arc<MultiPolygon>>,
     lines: Option<Arc<MultiLineString>>,
+    /// (layer, key) pairs already recorded in `shared.fields`.
+    seen_fields: std::collections::HashSet<(u8, String)>,
+    /// Warnings already reported by this state.
+    seen_warnings: std::collections::HashSet<String>,
 }
 
 impl Context {
@@ -96,6 +100,14 @@ impl Context {
             line: None,
             polygon: None,
             lines: None,
+            seen_fields: std::collections::HashSet::new(),
+            seen_warnings: std::collections::HashSet::new(),
+        }
+    }
+
+    fn warn(&mut self, msg: String) {
+        if self.seen_warnings.len() < 100 && self.seen_warnings.insert(msg.clone()) {
+            self.shared.warn(msg);
         }
     }
 
@@ -311,7 +323,7 @@ impl Context {
 
     fn attribute(&mut self, func: &str, key: String, value: AttributeValue, min_zoom: u8, field: u8) {
         let Some(out) = self.outputs.last_mut() else {
-            self.shared.warn(format!(
+            self.warn(format!(
                 "{func}(\"{key}\") without a Layer() first (object {})",
                 self.obj.id
             ));
@@ -327,8 +339,12 @@ impl Context {
             value,
             min_zoom,
         });
-        let mut fields = self.shared.fields.lock().unwrap();
-        fields[layer].entry(key).or_insert(field);
+        // Shared by every Lua state: lock only for keys this state has not
+        // recorded yet (as tilemaker's thread-local "already seen" set).
+        if self.seen_fields.insert((layer as u8, key.clone())) {
+            let mut fields = self.shared.fields.lock().unwrap();
+            fields[layer].entry(key).or_insert(field);
+        }
     }
 
     fn area(&mut self) -> f64 {
@@ -678,7 +694,7 @@ pub(crate) fn register(lua: &Lua) -> mlua::Result<()> {
             name,
             lua.create_function(move |lua, _layer: String| {
                 with(lua, |c| {
-                    c.shared.warn(format!(
+                    c.warn(format!(
                         "{name}() always returns false: shapefile layers are not supported"
                     ))
                 });
@@ -691,7 +707,7 @@ pub(crate) fn register(lua: &Lua) -> mlua::Result<()> {
             name,
             lua.create_function(move |lua, _layer: String| {
                 with(lua, |c| {
-                    c.shared.warn(format!(
+                    c.warn(format!(
                         "{name}() always returns nothing: shapefile layers are not supported"
                     ))
                 });

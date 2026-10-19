@@ -69,10 +69,9 @@ pub fn multipolygon_centroid(mp: &MultiPolygon) -> Option<Point> {
 
 /// Pole of inaccessibility of a polygon (a label point inside it).
 pub fn polygon_polylabel(p: &Polygon) -> Option<Point> {
-    let b = geo::BoundingRect::bounding_rect(p)?;
-    // Precision: a thousandth of the polygon's size.
-    let precision = (b.width().max(b.height()) / 1000.0).max(1e-9);
-    polylabel::polylabel(p, &precision).ok()
+    geo::BoundingRect::bounding_rect(p)?;
+    // tilemaker's precision: 0.00001° (about a metre).
+    polylabel::polylabel(p, &0.00001).ok()
 }
 
 /// Pole of inaccessibility of the largest polygon in a multipolygon.
