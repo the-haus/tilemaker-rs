@@ -71,6 +71,12 @@ On a 10-core Apple M-series machine:
 | the same, written as GeoJSON lines | 51 s, 2.8 GB | `osmium export`: 130 s, 4.1 GB |
 | Liechtenstein, OpenMapTiles profile → MBTiles | 1.1 s, 142 MB | C++ tilemaker: 2.4 s, 2.5 GB |
 
+## Documentation
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — passes, stores, flow control
+- [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) — what carries over from tilemaker
+- [the Node package](crates/bindings/tilemaker-node/README.md)
+
 ## Building and testing
 
 ```sh
