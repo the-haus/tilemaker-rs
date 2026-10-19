@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+//!
 //! A fast, streaming reader (and simple writer) for OpenStreetMap PBF files.
 //!
 //! * [`PbfFile`] indexes a file's blobs and decodes blocks in parallel,

@@ -5,6 +5,7 @@ version.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+readme = "README.md"
 description = "tilemaker — turn OpenStreetMap PBF files into vector tiles with a Lua profile and a JSON config."
 
 [features]

@@ -10,6 +10,8 @@ First release.
 - `reader.elements(options)` / `streamElements(path, options)`: nodes, ways
   (refs, optional coordinates) and relations (members), with osmium-style
   tag filters, tag selection, metadata, bbox.
+- `streamElements(bytes, options)`: elements from a `fetch()` body, a
+  `Readable`, stdin or any (async) iterable of bytes, with backpressure.
 - `reader.features(options)` / `streamFeatures(path, options)`: points,
   linestrings, multi-linestrings and multipolygons with flat `Float64Array`
   coordinates; `closedWays`, `geometryTypes`, `relationLines`,

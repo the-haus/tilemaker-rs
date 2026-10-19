@@ -17,6 +17,7 @@ lua54 = ["tilemaker-core/lua54"]
 napi = { version = "2", default-features = false, features = ["napi6", "serde-json"] }
 napi-derive = "2"
 serde_json.workspace = true
+crossbeam-channel.workspace = true
 
 tilemaker-pbf.workspace = true
 tilemaker-export.workspace = true

@@ -918,6 +918,109 @@ impl Runner<'_> {
     }
 }
 
+/// Stream elements from any byte stream (a download, stdin, a socket) in
+/// one pass, decoding blocks on worker threads as they arrive, in order.
+///
+/// Way locations need a second look at the data, so they are only
+/// available here when the file has `LocationsOnWays`; otherwise use
+/// [`export_elements`] on a file. Progress reports blocks done with a
+/// total of 0 (unknown).
+pub fn export_elements_from_reader<R: std::io::Read + Send + 'static>(
+    reader: R,
+    opts: &ElementOptions,
+    mut sink: impl FnMut(Event<Element>) -> Flow,
+) -> Result<ExportStats, ExportError> {
+    use tilemaker_pbf::{decompress_blob, BlobKind, BlobReader, Header};
+
+    let started = Instant::now();
+    let c = &opts.common;
+    let nthreads = threads(c.threads);
+    let mut blobs = BlobReader::new(reader);
+    // The header comes first.
+    let mut header = None;
+    let mut first_data = None;
+    for blob in blobs.by_ref() {
+        let (info, raw) = blob?;
+        match info.kind {
+            BlobKind::Header => {
+                let mut out = Vec::new();
+                decompress_blob(&raw, &mut out)?;
+                header = Some(Header::decode(&out)?);
+            }
+            BlobKind::Data => {
+                first_data = Some(raw);
+                break;
+            }
+            BlobKind::Unknown => {}
+        }
+    }
+    let header = header.ok_or(tilemaker_pbf::Error::Corrupt("no OSMHeader blob"))?;
+    header.check_supported()?;
+    if opts.ways && opts.way_locations && !header.has_locations_on_ways() {
+        return Err(ExportError::Invalid(
+            "way locations from a stream need a file with LocationsOnWays; read from a file instead".into(),
+        ));
+    }
+    let shared = Arc::new(ElemShared {
+        filters: c.filters.clone(),
+        tags: c.tags.clone(),
+        metadata: c.metadata,
+        bbox: c.bbox,
+        nodes: opts.nodes,
+        ways: opts.ways,
+        relations: opts.relations,
+        way_locations: opts.way_locations,
+        needed_nodes_builder: RwLock::new(None),
+        needed_nodes: RwLock::new(IdSet::new()),
+        builder: RwLock::new(None),
+        store: RwLock::new(None),
+    });
+    let decode = DecodeOptions {
+        nodes: opts.nodes && c.filters.may_select(ElementType::Node),
+        ways: opts.ways && c.filters.may_select(ElementType::Way),
+        relations: opts.relations && c.filters.may_select(ElementType::Relation),
+        metadata: c.metadata,
+    };
+    let data = first_data.map(Ok).into_iter().chain(blobs.filter_map(|b| match b {
+        Ok((info, raw)) => (info.kind == BlobKind::Data).then_some(Ok(raw)),
+        Err(e) => Some(Err(e)),
+    }));
+    let s = shared.clone();
+    let results = tilemaker_pbf::parallel::ordered_map(data, nthreads, nthreads * 2 + 2, move |raw| {
+        let raw = raw?;
+        let mut out = Vec::new();
+        decompress_blob(&raw, &mut out)?;
+        let b = PrimitiveBlock::decode(&out, decode)?;
+        let mut els: Vec<Element> = Vec::new();
+        els.extend(b.nodes().filter_map(|x| s.node(&x)));
+        els.extend(b.ways().filter_map(|x| s.way(&x, None)));
+        els.extend(b.relations().filter_map(|x| s.relation(&x)));
+        Ok::<_, tilemaker_pbf::Error>(els)
+    });
+    let mut stats = ExportStats::default();
+    for (done, r) in results.enumerate() {
+        let batch = r?;
+        if !batch.is_empty() {
+            stats.emitted += batch.len() as u64;
+            if sink(Event::Batch(batch)) == Flow::Stop {
+                stats.stopped = true;
+                break;
+            }
+        }
+        let p = Progress {
+            phase: Phase::Elements,
+            blocks_done: done + 1,
+            blocks_total: 0,
+        };
+        if sink(Event::Progress(p)) == Flow::Stop {
+            stats.stopped = true;
+            break;
+        }
+    }
+    stats.elapsed_ms = started.elapsed().as_millis() as u64;
+    Ok(stats)
+}
+
 /// Stream raw elements (nodes, ways, relations) that match the filters.
 /// Without way locations this is a single pass using constant memory.
 pub fn export_elements(

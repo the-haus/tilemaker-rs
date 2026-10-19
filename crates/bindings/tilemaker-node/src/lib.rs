@@ -9,6 +9,7 @@
 
 mod batch;
 mod credits;
+mod input;
 mod options;
 mod stream;
 mod tiles;
@@ -149,6 +150,23 @@ impl NativeReader {
         let cb = stream::callback(&callback)?;
         Ok(tiles::spawn_write(self.file.clone(), prepared, output, cb))
     }
+}
+
+/// Stream elements out of bytes pushed from JS (`push`, `endInput`).
+#[napi(ts_args_type = "options: StreamOptions, callback: (event: unknown) => void")]
+pub fn elements_from_input(options: StreamOptions, callback: JsFunction) -> Result<NativeStream> {
+    let opts = options::elements(&options)?;
+    let cb = stream::callback(&callback)?;
+    let (sender, reader) = input::channel(cb.clone());
+    let handle = stream::spawn::<ElementBatch, _>(
+        cb,
+        options.batch_size.unwrap_or(4096) as usize,
+        options.read_ahead.unwrap_or(2),
+        StreamEvent::Elements,
+        move |sink| tilemaker_export::export_elements_from_reader(reader, &opts, sink).map_err(|e| e.to_string()),
+    );
+    *handle.input.lock().unwrap() = Some(sender);
+    Ok(handle)
 }
 
 /// Opens and indexes a file on the libuv pool.

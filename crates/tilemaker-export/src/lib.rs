@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+//!
 //! Stream filtered OpenStreetMap data out of PBF files.
 //!
 //! * [`export_elements`]: raw nodes, ways and relations matching
@@ -16,8 +18,8 @@ pub mod record;
 
 pub use area::ClosedWays;
 pub use engine::{
-    export_elements, export_features, CommonOptions, ElementOptions, Event, ExportStats, FeatureOptions, Flow,
-    GeometryTypes, NodeStorage, Phase, Progress,
+    export_elements, export_elements_from_reader, export_features, CommonOptions, ElementOptions, Event, ExportStats,
+    FeatureOptions, Flow, GeometryTypes, NodeStorage, Phase, Progress,
 };
 pub use filter::{FilterParseError, FilterSet, TagFilter};
 pub use record::{Element, Feature, Geometry, GeometryType, MemberRecord, Meta, TagSelection};
@@ -35,4 +37,7 @@ pub enum ExportError {
     /// A bad filter.
     #[error(transparent)]
     Filter(#[from] FilterParseError),
+    /// Options that cannot work together.
+    #[error("{0}")]
+    Invalid(String),
 }

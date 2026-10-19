@@ -569,3 +569,57 @@ fn ways_pass_skips_blocks_without_needed_ways() {
     assert_eq!(totals[&Phase::ScanWays], 3);
     assert_eq!(totals[&Phase::Ways], 1);
 }
+
+#[test]
+fn elements_from_a_byte_stream() {
+    let path = town(sorted());
+    let bytes = std::fs::read(&path).unwrap();
+    // Feed it through a reader that returns a few bytes at a time.
+    struct Trickle(std::io::Cursor<Vec<u8>>);
+    impl std::io::Read for Trickle {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = buf.len().min(7);
+            self.0.read(&mut buf[..n])
+        }
+    }
+    let opts = ElementOptions {
+        common: CommonOptions {
+            filters: filters(&["w/highway", "r/type=route", "n/amenity"]),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut got = Vec::new();
+    let stats = export_elements_from_reader(Trickle(std::io::Cursor::new(bytes.clone())), &opts, |e| {
+        if let Event::Batch(b) = e {
+            got.extend(b);
+        }
+        Flow::Continue
+    })
+    .unwrap();
+    let (from_file, _) = elements(&path, &opts);
+    assert_eq!(got, from_file);
+    assert_eq!(stats.emitted, 4);
+    // Way locations need LocationsOnWays when streaming.
+    let with_locs = ElementOptions {
+        way_locations: true,
+        ..opts.clone()
+    };
+    let err =
+        export_elements_from_reader(std::io::Cursor::new(bytes.clone()), &with_locs, |_| Flow::Continue).unwrap_err();
+    assert!(err.to_string().contains("LocationsOnWays"));
+    // A truncated stream is an error.
+    let truncated = bytes[..bytes.len() - 5].to_vec();
+    assert!(export_elements_from_reader(std::io::Cursor::new(truncated), &opts, |_| Flow::Continue).is_err());
+    // Stopping early works.
+    let mut n = 0;
+    let stats = export_elements_from_reader(std::io::Cursor::new(bytes), &opts, |e| {
+        if let Event::Batch(b) = e {
+            n += b.len();
+            return Flow::Stop;
+        }
+        Flow::Continue
+    })
+    .unwrap();
+    assert!(stats.stopped && n > 0);
+}

@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 
 import { decodeElements, decodeFeatures, decodeTiles } from "./decode.js";
 import * as native from "./native.js";
-import type { NativeReader, NativeStreamOptions, NativeTileOptions } from "./native.js";
+import type { NativeReader, NativeStream, NativeStreamOptions, NativeTileOptions } from "./native.js";
 import { OsmStream } from "./stream.js";
 import {
   OsmStreamError,
@@ -236,18 +236,82 @@ export function streamFeatures(path: string | URL, options: FeatureOptions = {})
   );
 }
 
-/** {@link PbfReader.elements} on a path, opening the file when iteration starts. */
-export function streamElements(path: string | URL, options: ElementOptions = {}): OsmStream<Element> {
+/** Bytes of a PBF file arriving over time. */
+export type ByteSource = AsyncIterable<Uint8Array> | Iterable<Uint8Array> | ReadableStream<Uint8Array> | Uint8Array;
+
+/**
+ * Elements from a path (as {@link PbfReader.elements}), or from bytes as
+ * they arrive — a `fetch()` body, a Node `Readable`, stdin, any (async)
+ * iterable of `Uint8Array`s — without saving the file first. Reading from
+ * bytes is one pass, so `wayLocations` then needs a file with
+ * `LocationsOnWays`; progress reports `blocksTotal: 0` (unknown).
+ *
+ * ```ts
+ * const res = await fetch("https://download.geofabrik.de/europe/monaco-latest.osm.pbf");
+ * for await (const e of streamElements(res.body!, { filters: ["amenity"] })) { … }
+ * ```
+ */
+export function streamElements(source: string | URL | ByteSource, options: ElementOptions = {}): OsmStream<Element> {
   const opts = nativeOptions(options);
-  return new OsmStream<Element>(
-    async (cb) => {
-      const r = await openNative(path);
-      return r.elements(opts, cb);
+  if (typeof source === "string" || source instanceof URL) {
+    return new OsmStream<Element>(
+      async (cb) => {
+        const r = await openNative(source);
+        return r.elements(opts, cb);
+      },
+      decodeElements as (b: never) => Element[],
+      options.onProgress,
+      options.signal,
+    );
+  }
+  let stream: OsmStream<Element>;
+  const pump = async (n: NativeStream): Promise<void> => {
+    try {
+      for await (const chunk of iterateBytes(source)) {
+        if (stream._finished) break;
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+        const status = n.push(buf);
+        if (status === 2) break;
+        if (status === 1) await stream._drained();
+      }
+      n.endInput();
+    } catch (e) {
+      n.endInput();
+      stream._fail(e instanceof Error ? e : new OsmStreamError(String(e)));
+    }
+  };
+  stream = new OsmStream<Element>(
+    (cb) => {
+      const n = native.elementsFromInput(opts, cb);
+      void pump(n);
+      return n;
     },
     decodeElements as (b: never) => Element[],
     options.onProgress,
     options.signal,
   );
+  return stream;
+}
+
+async function* iterateBytes(source: ByteSource): AsyncGenerator<Uint8Array, void, undefined> {
+  const web = source as unknown as ReadableStream<Uint8Array>;
+  if (typeof web.getReader === "function" && !(Symbol.asyncIterator in source)) {
+    const reader = web.getReader();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        yield value;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+  if ((source as unknown) instanceof Uint8Array) {
+    yield source as unknown as Uint8Array;
+    return;
+  }
+  yield* source as AsyncIterable<Uint8Array>;
 }
 
 function tileStream(

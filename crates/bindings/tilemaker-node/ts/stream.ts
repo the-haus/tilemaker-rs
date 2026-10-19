@@ -114,21 +114,47 @@ export class OsmStream<T, S = ExportStats, P = Progress> implements AsyncIterabl
       }
       case "end":
         this.#ended = true;
+        for (const resolve of this.#drainWaiters.splice(0)) resolve();
         this.#release();
         this.#resolveStats(event.stats as unknown as S);
         this.#wake();
         return;
+      case "drain": {
+        const d = this.#drainWaiters;
+        this.#drainWaiters = [];
+        for (const resolve of d) resolve();
+        return;
+      }
       case "error":
         this.#fail(new OsmStreamError(event.message));
         return;
     }
   };
 
+  #drainWaiters: Array<() => void> = [];
+
+  /** @internal Resolves at the next "drain" event (or when the stream ends). */
+  _drained(): Promise<void> {
+    if (this.#ended || this.#closed) return Promise.resolve();
+    return new Promise((resolve) => this.#drainWaiters.push(resolve));
+  }
+
+  /** @internal Whether the stream has ended or was closed. */
+  get _finished(): boolean {
+    return this.#ended || this.#closed;
+  }
+
+  /** @internal Fail the stream (e.g. when its input fails). */
+  _fail(error: Error): void {
+    this.#fail(error);
+  }
+
   #fail(error: Error): void {
     if (this.#error) return;
     this.#error = error;
     this.#ended = true;
     this.#native?.close();
+    for (const resolve of this.#drainWaiters.splice(0)) resolve();
     this.#release();
     this.#rejectStats(error);
     if (this.#waiter) {
@@ -216,6 +242,7 @@ export class OsmStream<T, S = ExportStats, P = Progress> implements AsyncIterabl
     this.#closed = true;
     this.#queue.length = 0;
     this.#signal?.removeEventListener("abort", this.#abort);
+    for (const resolve of this.#drainWaiters.splice(0)) resolve();
     if (this.#native) {
       this.#native.close();
       // Stay alive until the end event arrives, so `stats` resolves.

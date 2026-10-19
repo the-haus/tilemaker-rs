@@ -110,6 +110,7 @@ export type NativeEvent =
       tilesDone?: number;
       tilesTotal?: number;
     }
+  | { type: "drain" }
   | { type: "end"; stats: Record<string, number | boolean> }
   | { type: "error"; message: string };
 
@@ -118,6 +119,9 @@ export interface NativeStream {
   close(): void;
   setRef(referenced: boolean): void;
   release(): void;
+  /** 0: keep pushing; 1: wait for "drain"; 2: the export is over. */
+  push(chunk: Buffer): number;
+  endInput(): void;
 }
 
 export interface NativeReader {
@@ -132,4 +136,5 @@ export interface NativeReader {
 }
 
 export function open(path: string): Promise<NativeReader>;
+export function elementsFromInput(options: NativeStreamOptions, callback: (event: NativeEvent) => void): NativeStream;
 export function version(): string;

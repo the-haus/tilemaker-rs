@@ -20,6 +20,8 @@ pub(crate) enum StreamEvent {
     Tiles(crate::tiles::TileBatch),
     Progress(Progress),
     TileProgress(tilemaker_core::Progress),
+    /// Input bytes were consumed; JS may push more.
+    Drain,
     End(serde_json::Value),
     Error(String),
 }
@@ -66,6 +68,9 @@ impl StreamEvent {
                 o.set("blocksDone", p.blocks_done as u32)?;
                 o.set("blocksTotal", p.blocks_total as u32)?;
             }
+            StreamEvent::Drain => {
+                o.set("type", "drain")?;
+            }
             StreamEvent::End(stats) => {
                 o.set("type", "end")?;
                 o.set("stats", env.to_js_value(&stats)?)?;
@@ -98,6 +103,8 @@ pub(crate) fn callback(f: &JsFunction) -> Result<Callback> {
 pub struct NativeStream {
     pub(crate) credits: Arc<Credits>,
     pub(crate) callback: std::sync::Mutex<Option<Callback>>,
+    /// For streams over pushed bytes: where `push` sends them.
+    pub(crate) input: std::sync::Mutex<Option<crate::input::InputSender>>,
 }
 
 impl NativeStream {
@@ -105,6 +112,7 @@ impl NativeStream {
         Self {
             credits,
             callback: std::sync::Mutex::new(Some(callback)),
+            input: std::sync::Mutex::new(None),
         }
     }
 }
@@ -140,6 +148,24 @@ impl NativeStream {
     #[napi]
     pub fn close(&self) {
         self.credits.close();
+        // A reader waiting for input sees the end of it.
+        self.input.lock().unwrap().take();
+    }
+
+    /// Push input bytes (streams over pushed bytes only): 0 keep going,
+    /// 1 wait for the `drain` event, 2 the export is over.
+    #[napi]
+    pub fn push(&self, chunk: napi::bindgen_prelude::Buffer) -> u32 {
+        match self.input.lock().unwrap().as_ref() {
+            Some(i) => i.push(chunk.to_vec()) as u32,
+            None => crate::input::PushStatus::Closed as u32,
+        }
+    }
+
+    /// No more input.
+    #[napi]
+    pub fn end_input(&self) {
+        self.input.lock().unwrap().take();
     }
 }
 

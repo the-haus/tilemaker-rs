@@ -66,6 +66,25 @@ Without `wayLocations` this is a single pass in constant memory. With it, a
 first pass finds the nodes the selected ways need and only those locations
 are kept (compressed, ~10 bytes each).
 
+### Straight from a download
+
+`streamElements` also takes bytes as they arrive — a `fetch()` body, a Node
+`Readable`, stdin, any (async) iterable of `Uint8Array`s — so a file never
+has to touch the disk:
+
+```ts
+import { streamElements } from "@tilemaker-rs/node";
+
+const res = await fetch("https://download.geofabrik.de/europe/monaco-latest.osm.pbf");
+for await (const e of streamElements(res.body!, { filters: ["amenity"] })) {
+  // decoded on worker threads as the bytes arrive
+}
+```
+
+The source is read only as fast as you consume (at most ~8 MB ahead).
+Reading bytes is a single pass, so it gives elements (not assembled
+features), and `wayLocations` needs a file with `LocationsOnWays`.
+
 ## Features
 
 ```ts

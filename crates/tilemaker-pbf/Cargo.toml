@@ -5,6 +5,7 @@ version.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+readme = "README.md"
 description = "tilemaker — a fast, streaming OpenStreetMap PBF reader with parallel, order-preserving block decoding."
 keywords = ["openstreetmap", "osm", "pbf", "protobuf", "streaming"]
 categories = ["parser-implementations", "science::geo"]

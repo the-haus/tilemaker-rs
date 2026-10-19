@@ -1124,6 +1124,7 @@ version = "0.1.0"
 name = "tilemaker-node"
 version = "0.1.0"
 dependencies = [
+ "crossbeam-channel",
  "napi",
  "napi-build",
  "napi-derive",
