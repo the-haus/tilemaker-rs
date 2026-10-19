@@ -416,16 +416,18 @@ pub(crate) fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "Find",
-        lua.create_function(|lua, key: mlua::LuaString| {
+        // `String` arguments are read straight off the stack; `LuaString`
+        // ones would each take (and drop) a registry reference.
+        lua.create_function(|lua, key: String| {
             let c = lua.app_data_ref::<Context>().unwrap();
-            lua.create_string(c.find(&key.as_bytes()).unwrap_or(""))
+            lua.create_string(c.find(key.as_bytes()).unwrap_or(""))
         })?,
     )?;
     g.set(
         "Holds",
-        lua.create_function(|lua, key: mlua::LuaString| {
+        lua.create_function(|lua, key: String| {
             let c = lua.app_data_ref::<Context>().unwrap();
-            Ok(c.find(&key.as_bytes()).is_some())
+            Ok(c.find(key.as_bytes()).is_some())
         })?,
     )?;
     g.set(

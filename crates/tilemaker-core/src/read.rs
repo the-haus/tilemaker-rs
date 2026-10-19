@@ -3,6 +3,7 @@
 //! Blocks are decoded and processed on a rayon pool with one Lua state per
 //! thread; results are merged into [`TileData`] on the calling thread.
 
+use std::cell::RefCell;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -50,33 +51,67 @@ fn owned_tags(t: &Tags<'_>) -> Vec<(String, String)> {
     t.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
 }
 
+thread_local! {
+    /// This thread's Lua state, tagged with the run that loaded it. Each run
+    /// has its own rayon pool, whose threads (and so these states) end with
+    /// it; the tag guards against reuse anyway.
+    static PROFILE: RefCell<Option<(u64, LuaProfile)>> = const { RefCell::new(None) };
+}
+
+static RUNS: AtomicU64 = AtomicU64::new(0);
+
+/// One Lua state per pool thread, as tilemaker (states are not shared, so
+/// calls into Lua need no locking).
 struct Profiles {
+    run: u64,
     source: Arc<str>,
     name: String,
     shared: Arc<Shared>,
-    slots: Vec<OnceLock<Mutex<LuaProfile>>>,
+    first: AtomicBool,
+    scanned: OnceLock<Arc<ScannedRelations>>,
     first_error: Mutex<Option<String>>,
 }
 
 impl Profiles {
-    /// This pool thread's profile.
-    fn with<R>(&self, f: impl FnOnce(&mut LuaProfile) -> Result<R, CoreError>) -> Result<R, CoreError> {
-        let i = rayon::current_thread_index().unwrap_or(0);
-        let slot = &self.slots[i];
-        if slot.get().is_none() {
-            let p = LuaProfile::load(&self.source, &self.name, self.shared.clone(), i == 0)?;
-            let _ = slot.set(Mutex::new(p));
+    fn new(source: &str, name: &str, shared: Arc<Shared>) -> Self {
+        Self {
+            run: RUNS.fetch_add(1, Ordering::Relaxed),
+            source: source.into(),
+            name: name.to_string(),
+            shared,
+            first: AtomicBool::new(true),
+            scanned: OnceLock::new(),
+            first_error: Mutex::new(None),
         }
-        let mut p = slot.get().unwrap().lock().unwrap();
-        f(&mut p)
     }
 
-    fn for_each(&self, mut f: impl FnMut(&LuaProfile)) {
-        for s in &self.slots {
-            if let Some(p) = s.get() {
-                f(&p.lock().unwrap());
+    /// This pool thread's profile (loaded on first use).
+    fn with<R>(&self, f: impl FnOnce(&mut LuaProfile) -> Result<R, CoreError>) -> Result<R, CoreError> {
+        PROFILE.with(|cell| {
+            let mut slot = cell.borrow_mut();
+            if slot.as_ref().map(|s| s.0) != Some(self.run) {
+                let is_first = self.first.swap(false, Ordering::SeqCst);
+                let p = LuaProfile::load(&self.source, &self.name, self.shared.clone(), is_first)?;
+                if let Some(sc) = self.scanned.get() {
+                    p.set_scanned_relations(sc.clone());
+                }
+                *slot = Some((self.run, p));
             }
-        }
+            f(&mut slot.as_mut().unwrap().1)
+        })
+    }
+
+    /// Run `f` on every pool thread's profile of this run.
+    fn for_each(&self, pool: &rayon::ThreadPool, f: impl Fn(&LuaProfile) + Sync) {
+        pool.broadcast(|_| {
+            PROFILE.with(|cell| {
+                if let Some((run, p)) = &*cell.borrow() {
+                    if *run == self.run {
+                        f(p);
+                    }
+                }
+            })
+        });
     }
 }
 
@@ -159,13 +194,7 @@ pub(crate) fn read(
     shared: Arc<Shared>,
 ) -> Result<(TileData, ReadStats), CoreError> {
     let layout = r.file.layout()?;
-    let profiles = Arc::new(Profiles {
-        source: profile_source.into(),
-        name: profile_name.to_string(),
-        shared: shared.clone(),
-        slots: (0..r.threads.max(1)).map(|_| OnceLock::new()).collect(),
-        first_error: Mutex::new(None),
-    });
+    let profiles = Arc::new(Profiles::new(profile_source, profile_name, shared.clone()));
     // Load one profile up front: syntax errors surface before any reading,
     // and its capabilities decide which passes run.
     let caps = r.pool.install(|| profiles.with(|p| Ok(p.capabilities().clone())))?;
@@ -262,10 +291,8 @@ pub(crate) fn read(
         scanned = r.pool.install(|| profiles.with(|p| Ok(p.postscan(s, &ids)?)))?;
     }
     let scanned = Arc::new(scanned);
-    {
-        let sc = scanned.clone();
-        profiles.for_each(|p| p.set_scanned_relations(sc.clone()));
-    }
+    let _ = profiles.scanned.set(scanned.clone());
+    profiles.for_each(r.pool, |p| p.set_scanned_relations(scanned.clone()));
     let used_ways = used_ways_b.freeze();
     let used_relations = used_relations_b.freeze();
 
@@ -512,14 +539,14 @@ pub(crate) fn read(
     drop(way_store);
     drop(node_store);
     // exit_function on every state.
-    let mut exit_err = None;
-    profiles.for_each(|p| {
+    let exit_err = Mutex::new(None);
+    profiles.for_each(r.pool, |p| {
         if let Err(e) = p.exit() {
-            exit_err.get_or_insert(e);
+            exit_err.lock().unwrap().get_or_insert(e.to_string());
         }
     });
-    if let Some(e) = exit_err {
-        return Err(e.into());
+    if let Some(e) = exit_err.into_inner().unwrap() {
+        return Err(CoreError::Profile(e));
     }
     if let Some(e) = profiles.first_error.lock().unwrap().take() {
         return Err(CoreError::Profile(e));

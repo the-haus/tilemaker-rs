@@ -33,19 +33,22 @@ pub use relations::{MemberKind, ScannedRelations};
 #[derive(Debug, thiserror::Error)]
 pub enum ProfileError {
     /// Loading or running Lua failed.
-    #[error("Lua error{context}: {source}")]
+    #[error("Lua error{context}: {message}")]
     Lua {
         /// Which object, if any.
         context: String,
-        /// The Lua error.
-        #[source]
-        source: mlua::Error,
+        /// The Lua error, with its traceback (a message: Lua errors are not
+        /// `Send`, as each Lua state stays on its thread).
+        message: String,
     },
 }
 
 fn lua_err(context: impl Into<String>) -> impl FnOnce(mlua::Error) -> ProfileError {
     let context = context.into();
-    move |source| ProfileError::Lua { context, source }
+    move |source| ProfileError::Lua {
+        context,
+        message: source.to_string(),
+    }
 }
 
 /// Things every profile instance shares: layer definitions, `SetData`
