@@ -240,50 +240,42 @@ pub fn generate(
     };
     stats.read = read_stats;
 
-    let renderer = tile::Renderer {
-        data: &data,
-        config: &config,
+    let renderer = Arc::new(tile::Renderer {
+        data: Arc::new(data),
+        config: Arc::new(config.clone()),
         clip,
-    };
+    });
     'zooms: for z in config.minzoom..=config.maxzoom {
         if stopped {
             break;
         }
         let tiles = renderer.zoom_tiles(z);
         let total = tiles.len();
-        let mut done = 0;
-        let mut iter = tiles.into_iter();
-        loop {
-            let chunk: Vec<_> = iter.by_ref().take(256).collect();
-            if chunk.is_empty() {
-                break;
-            }
-            let rendered: Vec<Option<(usize, Tile)>> = pool.install(|| {
-                use rayon::prelude::*;
-                chunk
-                    .into_par_iter()
-                    .map(|(t, objs)| {
-                        renderer.render(z, t, objs).map(|data| {
-                            let raw = data.len();
-                            let data = match opts.compression {
-                                tilemaker_output::Compression::None => data,
-                                c => tilemaker_output::compress(&data, c),
-                            };
-                            (
-                                raw,
-                                Tile {
-                                    z,
-                                    x: t.x,
-                                    y: t.y,
-                                    data,
-                                },
-                            )
-                        })
-                    })
-                    .collect()
-            });
-            done += rendered.len();
-            for (raw, t) in rendered.into_iter().flatten() {
+        // Render (and compress) on worker threads, continuously, while the
+        // tiles are handed out in order here.
+        let r = renderer.clone();
+        let compression = opts.compression;
+        let results = tilemaker_pbf::parallel::ordered_map(tiles, n, n * 8, move |(t, objs)| {
+            r.render(z, t, objs).map(|data| {
+                let raw = data.len();
+                let data = match compression {
+                    tilemaker_output::Compression::None => data,
+                    c => tilemaker_output::compress(&data, c),
+                };
+                (
+                    raw,
+                    Tile {
+                        z,
+                        x: t.x,
+                        y: t.y,
+                        data,
+                    },
+                )
+            })
+        });
+        for (i, item) in results.enumerate() {
+            let done = i + 1;
+            if let Some((raw, t)) = item {
                 stats.tiles += 1;
                 stats.tiles_per_zoom[z as usize] += 1;
                 stats.bytes += raw as u64;
@@ -292,7 +284,9 @@ pub fn generate(
                     break 'zooms;
                 }
             }
-            if sink(Event::Progress(Progress::Tiles { zoom: z, done, total })) == Flow::Stop {
+            if (done % 256 == 0 || done == total)
+                && sink(Event::Progress(Progress::Tiles { zoom: z, done, total })) == Flow::Stop
+            {
                 stopped = true;
                 break 'zooms;
             }

@@ -15,15 +15,15 @@ use tilemaker_mvt::{GeomType, LayerBuilder, TileBuilder, Value};
 
 use crate::data::{OutputObject, TileData};
 
-pub(crate) struct Renderer<'a> {
-    pub data: &'a TileData,
-    pub config: &'a Config,
+pub(crate) struct Renderer {
+    pub data: std::sync::Arc<TileData>,
+    pub config: std::sync::Arc<Config>,
     /// Tiles must intersect all of these `[west, south, east, north]` boxes
     /// (the `--bbox` or file header box, and the config's `bounding_box`).
     pub clip: Vec<[f64; 4]>,
 }
 
-impl Renderer<'_> {
+impl Renderer {
     fn visible(&self, o: &OutputObject, z: u8) -> bool {
         let l = &self.config.layers.layers[o.layer as usize];
         o.min_zoom <= z && l.minzoom <= z && z <= l.maxzoom
@@ -31,7 +31,7 @@ impl Renderer<'_> {
 
     /// The tiles at zoom `z` that hold anything, with their objects.
     pub fn zoom_tiles(&self, z: u8) -> Vec<(TileCoord, Vec<u32>)> {
-        let d = self.data;
+        let d = &self.data;
         let dz = d.base_zoom - z;
         let mut map: HashMap<TileCoord, Vec<u32>> = HashMap::new();
         for (t, objs) in &d.tiles {
