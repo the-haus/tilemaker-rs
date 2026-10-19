@@ -1161,6 +1161,7 @@ dependencies = [
  "memmap2",
  "thiserror",
  "tilemaker-geom",
+ "windows-sys",
 ]
 
 [[package]]

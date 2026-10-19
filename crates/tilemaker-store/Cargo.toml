@@ -11,3 +11,6 @@ description = "tilemaker — id sets and node/way location stores for OpenStreet
 tilemaker-geom.workspace = true
 memmap2.workspace = true
 thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_IO", "Win32_System_Ioctl"] }

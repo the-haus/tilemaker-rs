@@ -181,8 +181,25 @@ impl PbfFile {
         F: Fn(usize, PrimitiveBlock) -> Result<R, Error> + Send + Sync + 'static,
     {
         let range = range.start.min(self.blobs.len())..range.end.min(self.blobs.len());
+        self.map_block_list(range.collect(), opts, threads, f)
+    }
+
+    /// Like [`map_blocks`](Self::map_blocks) for a list of block indices
+    /// (in the order given).
+    pub fn map_block_list<R, F>(
+        &self,
+        blocks: Vec<usize>,
+        opts: DecodeOptions,
+        threads: usize,
+        f: F,
+    ) -> OrderedMap<Result<R, Error>>
+    where
+        R: Send + 'static,
+        F: Fn(usize, PrimitiveBlock) -> Result<R, Error> + Send + Sync + 'static,
+    {
+        let n = self.blobs.len();
         let reader = self.clone();
-        let raws = range.map(move |i| {
+        let raws = blocks.into_iter().filter(move |&i| i < n).map(move |i| {
             let info = reader.blobs[i];
             (i, reader.read_blob(&info))
         });

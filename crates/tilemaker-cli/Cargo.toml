@@ -11,6 +11,11 @@ description = "tilemaker — make vector tiles from OpenStreetMap data (command 
 name = "tilemaker"
 path = "src/main.rs"
 
+[features]
+default = ["luajit"]
+luajit = ["tilemaker-core/luajit"]
+lua54 = ["tilemaker-core/lua54"]
+
 [dependencies]
 tilemaker-pbf.workspace = true
 tilemaker-config.workspace = true

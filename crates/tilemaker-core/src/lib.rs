@@ -62,7 +62,7 @@ pub enum CoreError {
 }
 
 /// A pass over the OSM file.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Phase {
     /// Relations through `relation_scan_function`.

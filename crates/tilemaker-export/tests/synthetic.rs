@@ -526,3 +526,46 @@ fn many_blocks_keep_order() {
     assert!(fs[30_000..].windows(2).all(|w| w[0].id < w[1].id));
     assert_eq!(stats.stored_nodes, 3_002);
 }
+
+#[test]
+fn ways_pass_skips_blocks_without_needed_ways() {
+    // 3 blocks of ways; the only relation uses a way in the middle block.
+    let path = temp("skip.osm.pbf");
+    let mut w = PbfWriter::with_options(Vec::new(), sorted());
+    for (i, lon, lat) in [(1, 0.0, 0.0), (2, 1.0, 0.0), (3, 1.0, 1.0), (4, 0.0, 1.0)] {
+        w.node(i, e7(lat), e7(lon), &[]).unwrap();
+    }
+    for i in 1..=24_000i64 {
+        w.way(i, &[1, 2, 3, 4, 1], &[]).unwrap();
+    }
+    w.relation(
+        1,
+        &[(12_000, ElementType::Way, "outer")],
+        &[("type", "multipolygon"), ("landuse", "x")],
+    )
+    .unwrap();
+    std::fs::write(&path, w.finish().unwrap()).unwrap();
+    let file = PbfFile::open(&path).unwrap();
+    let opts = FeatureOptions {
+        common: CommonOptions {
+            filters: filters(&["r/landuse"]),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut totals = std::collections::HashMap::new();
+    let mut features = 0;
+    export_features(&file, &opts, |e| {
+        match e {
+            Event::Progress(p) => {
+                totals.insert(p.phase, p.blocks_total);
+            }
+            Event::Batch(b) => features += b.len(),
+        }
+        Flow::Continue
+    })
+    .unwrap();
+    assert_eq!(features, 1);
+    assert_eq!(totals[&Phase::ScanWays], 3);
+    assert_eq!(totals[&Phase::Ways], 1);
+}

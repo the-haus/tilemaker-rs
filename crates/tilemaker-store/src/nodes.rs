@@ -126,6 +126,39 @@ fn get_varint(buf: &[u8]) -> (u64, usize) {
     (v, buf.len())
 }
 
+/// Mark a file sparse, so that sizing it does not allocate disk space.
+/// (Unix filesystems with sparse files need nothing.)
+#[cfg(windows)]
+fn make_sparse(file: &File) -> std::io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::Ioctl::FSCTL_SET_SPARSE;
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+    let mut returned = 0u32;
+    // SAFETY: a valid handle for the file's lifetime; no buffers.
+    let ok = unsafe {
+        DeviceIoControl(
+            file.as_raw_handle() as _,
+            FSCTL_SET_SPARSE,
+            std::ptr::null(),
+            0,
+            std::ptr::null_mut(),
+            0,
+            &mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn make_sparse(_file: &File) -> std::io::Result<()> {
+    Ok(())
+}
+
 /// Latitudes are stored offset so that an all-zero slot means "absent".
 const LAT_BIAS: i64 = 1_000_000_000;
 /// The dense file covers ids below 2^35 (34 billion; the planet is at 14).
@@ -246,6 +279,7 @@ impl NodeStore {
             .create(true)
             .truncate(true)
             .open(&path)?;
+        make_sparse(&file)?;
         file.set_len(DENSE_MAX_ID * 8)?;
         // SAFETY: the file is private to this store (created and truncated
         // above, removed on drop); nothing else maps or resizes it.

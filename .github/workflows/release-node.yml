@@ -1,0 +1,113 @@
+# Publish @tilemaker-rs/node: one root package (JS, types, loader) plus one
+# platform subpackage per napi triple, built in parallel and assembled with
+# napi-rs' create-npm-dir / artifacts.
+name: release-node
+
+on:
+  push:
+    tags: ["node-v*"]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Build everything but do not publish.
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build ${{ matrix.triple }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, triple: linux-x64-gnu, cross: "", lua: luajit }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu, triple: linux-arm64-gnu, cross: zig, lua: lua54 }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, triple: linux-x64-musl, cross: zig, lua: lua54 }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-musl, triple: linux-arm64-musl, cross: zig, lua: lua54 }
+          - { os: macos-latest, target: x86_64-apple-darwin, triple: darwin-x64, cross: "", lua: luajit }
+          - { os: macos-latest, target: aarch64-apple-darwin, triple: darwin-arm64, cross: "", lua: luajit }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, triple: win32-x64-msvc, cross: "", lua: luajit }
+    defaults:
+      run:
+        working-directory: crates/bindings/tilemaker-node
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: release-${{ matrix.triple }}
+          targets: ${{ matrix.target }}
+      - if: matrix.cross == 'zig'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: "0.13.0"
+      - uses: ./.github/actions/setup-node-yarn
+      - name: yarn install
+        working-directory: .
+        run: corepack yarn install --immutable
+      - name: build native
+        shell: bash
+        run: |
+          FEATURES=""
+          if [ "${{ matrix.lua }}" = "lua54" ]; then FEATURES="--no-default-features --features lua54"; fi
+          ZIG=""
+          if [ "${{ matrix.cross }}" = "zig" ]; then ZIG="--zig"; fi
+          corepack yarn exec napi build --platform --release --js false --target "${{ matrix.target }}" $ZIG $FEATURES
+      - name: check the binary exists
+        shell: bash
+        run: test -f "tilemaker-node.${{ matrix.triple }}.node"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: binary-${{ matrix.triple }}
+          path: crates/bindings/tilemaker-node/tilemaker-node.${{ matrix.triple }}.node
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    needs: build
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: crates/bindings/tilemaker-node
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-node-yarn
+        with:
+          registry-url: "https://registry.npmjs.org"
+      - working-directory: .
+        run: corepack yarn install --immutable
+      - run: corepack yarn run build:ts && corepack yarn run copy-license
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: crates/bindings/tilemaker-node/artifacts
+          merge-multiple: true
+      - run: corepack yarn exec napi create-npm-dir -t .
+      - run: corepack yarn exec napi artifacts --dir artifacts --dist npm
+      - name: optionalDependencies on the platform packages
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const triples = ["linux-x64-gnu","linux-arm64-gnu","linux-x64-musl","linux-arm64-musl","darwin-x64","darwin-arm64","win32-x64-msvc"];
+            pkg.optionalDependencies = Object.fromEntries(triples.map((t) => [`@tilemaker-rs/node-${t}`, pkg.version]));
+            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+          '
+      - name: publish platform packages
+        if: github.event_name == 'push' || inputs.dry-run == false
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: for d in npm/*/; do (cd "$d" && npm publish --provenance --access public --ignore-scripts); done
+      - name: publish root package
+        if: github.event_name == 'push' || inputs.dry-run == false
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public --ignore-scripts

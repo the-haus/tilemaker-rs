@@ -84,6 +84,16 @@ impl Container {
         }
     }
 
+    fn any_between(&self, from: u16, to: u16) -> bool {
+        match self {
+            Container::Array(a) => {
+                let i = a.partition_point(|&x| x < from);
+                i < a.len() && a[i] <= to
+            }
+            Container::Bitmap(b) => (from..=to).any(|o| b[(o >> 6) as usize] & (1 << (o & 63)) != 0),
+        }
+    }
+
     fn len(&self) -> usize {
         match self {
             Container::Array(a) => a.len(),
@@ -212,6 +222,33 @@ impl IdSet {
         }
     }
 
+    /// Whether any id in `lo..=hi` is in the set.
+    pub fn any_in_range(&self, lo: i64, hi: i64) -> bool {
+        if lo > hi {
+            return false;
+        }
+        if self.others.iter().any(|&o| o >= lo && o <= hi) {
+            return true;
+        }
+        let (lo, hi) = (lo.max(0), hi.min(MAX_DENSE as i64 - 1));
+        if lo > hi {
+            return false;
+        }
+        let (c0, c1) = ((lo as u64 >> CHUNK_BITS) as usize, (hi as u64 >> CHUNK_BITS) as usize);
+        for c in c0..=c1.min(self.table.len().saturating_sub(1)) {
+            let Some(Some(container)) = self.table.get(c) else {
+                continue;
+            };
+            let base = (c as u64) << CHUNK_BITS;
+            let from = if c == c0 { (lo as u64 - base) as u16 } else { 0 };
+            let to = if c == c1 { (hi as u64 - base) as u16 } else { u16::MAX };
+            if container.any_between(from, to) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Number of ids.
     pub fn len(&self) -> usize {
         self.table.iter().flatten().map(Container::len).sum::<usize>() + self.others.len()
@@ -280,6 +317,25 @@ mod tests {
         assert!(s.heap_bytes() < 100_000 * 2 + 153_000 * 24 + 1024, "{}", s.heap_bytes());
         assert!(s.contains(100_003 * 99_999));
         assert!(!s.contains(100_003 * 99_999 + 1));
+    }
+
+    #[test]
+    fn range_queries() {
+        let b = IdSetBuilder::new();
+        b.insert_all(&[5, 70_000, 200_000, 14_274_176_831, -9]);
+        let dense: Vec<i64> = (300_000..310_000).collect();
+        b.insert_all(&dense);
+        let s = b.freeze();
+        assert!(s.any_in_range(0, 5));
+        assert!(!s.any_in_range(6, 69_999));
+        assert!(s.any_in_range(6, 70_000));
+        assert!(s.any_in_range(100_000, 250_000));
+        assert!(!s.any_in_range(200_001, 299_999));
+        assert!(s.any_in_range(305_000, 305_000), "bitmap container");
+        assert!(!s.any_in_range(310_000, 1_000_000));
+        assert!(s.any_in_range(14_000_000_000, 15_000_000_000));
+        assert!(s.any_in_range(-10, -1));
+        assert!(!s.any_in_range(10, 4));
     }
 
     #[test]

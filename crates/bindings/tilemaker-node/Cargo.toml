@@ -8,6 +8,11 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = ["luajit"]
+luajit = ["tilemaker-core/luajit"]
+lua54 = ["tilemaker-core/lua54"]
+
 [dependencies]
 napi = { version = "2", default-features = false, features = ["napi6", "serde-json"] }
 napi-derive = "2"

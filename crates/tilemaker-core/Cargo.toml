@@ -7,6 +7,13 @@ repository.workspace = true
 rust-version.workspace = true
 description = "tilemaker — turn OpenStreetMap PBF files into vector tiles with a Lua profile and a JSON config."
 
+[features]
+default = ["luajit"]
+# The Lua that runs profiles: LuaJIT (fast, tilemaker's usual) or Lua 5.4
+# (plain C; simpler to cross-compile). Exactly one.
+luajit = ["tilemaker-lua/luajit"]
+lua54 = ["tilemaker-lua/lua54"]
+
 [dependencies]
 tilemaker-pbf.workspace = true
 tilemaker-geom.workspace = true

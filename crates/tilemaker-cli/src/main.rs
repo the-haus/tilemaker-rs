@@ -29,7 +29,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Stream filtered features (or elements) as newline-delimited GeoJSON.
+    /// Stream filtered, assembled features as newline-delimited GeoJSON.
     Export(ExportArgs),
     /// Count features per zoom and layer in an .mbtiles or .pmtiles file.
     Inspect {
