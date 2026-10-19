@@ -89,13 +89,47 @@ pub(crate) fn callback(f: &JsFunction) -> Result<Callback> {
 }
 
 /// The handle JS holds for a running export.
+///
+/// It keeps a handle on the threadsafe function so JS can decide when the
+/// stream keeps the event loop alive: only while it awaits a batch (or the
+/// end of a closed stream). An abandoned, half-read stream then does not
+/// keep the process running.
 #[napi]
 pub struct NativeStream {
     pub(crate) credits: Arc<Credits>,
+    pub(crate) callback: std::sync::Mutex<Option<Callback>>,
+}
+
+impl NativeStream {
+    pub(crate) fn new(credits: Arc<Credits>, callback: Callback) -> Self {
+        Self {
+            credits,
+            callback: std::sync::Mutex::new(Some(callback)),
+        }
+    }
 }
 
 #[napi]
 impl NativeStream {
+    /// Whether the stream keeps the event loop alive.
+    #[napi]
+    pub fn set_ref(&self, env: Env, referenced: bool) -> napi::Result<()> {
+        if let Some(cb) = self.callback.lock().unwrap().as_mut() {
+            if referenced {
+                cb.refer(&env)?;
+            } else {
+                cb.unref(&env)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Drop this handle's reference to the callback (after the end).
+    #[napi]
+    pub fn release(&self) {
+        self.callback.lock().unwrap().take();
+    }
+
     /// Allow `n` more batches to be sent.
     #[napi]
     pub fn request(&self, n: u32) {
@@ -218,9 +252,7 @@ where
 {
     let credits = Arc::new(Credits::default());
     credits.grant(read_ahead.max(1));
-    let handle = NativeStream {
-        credits: credits.clone(),
-    };
+    let handle = NativeStream::new(credits.clone(), cb.clone());
     thread::Builder::new()
         .name("tilemaker-export".into())
         .spawn(move || {

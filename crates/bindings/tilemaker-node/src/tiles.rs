@@ -169,9 +169,7 @@ pub(crate) fn spawn_tiles(
 ) -> NativeStream {
     let credits = Arc::new(Credits::default());
     credits.grant(read_ahead.max(1));
-    let handle = NativeStream {
-        credits: credits.clone(),
-    };
+    let handle = NativeStream::new(credits.clone(), cb.clone());
     thread::Builder::new()
         .name("tilemaker-tiles".into())
         .spawn(move || {
@@ -229,9 +227,7 @@ pub(crate) fn spawn_tiles(
 
 pub(crate) fn spawn_write(file: PbfFile, p: Prepared, output: String, cb: Callback) -> NativeStream {
     let credits = Arc::new(Credits::default());
-    let handle = NativeStream {
-        credits: credits.clone(),
-    };
+    let handle = NativeStream::new(credits.clone(), cb.clone());
     thread::Builder::new()
         .name("tilemaker-write".into())
         .spawn(move || {

@@ -186,11 +186,18 @@ describe("streaming", () => {
         console.log(all.length);
         // An unconsumed, never-started stream must not keep the loop alive either.
         pbf.features();
+        // Nor one read half-way and abandoned without close().
+        const it = pbf.features({ batchSize: 5, readAhead: 1 })[Symbol.asyncIterator]();
+        await it.next();
+        // A closed stream still delivers its stats before the process exits.
+        const closed = pbf.features({ batchSize: 5 });
+        for await (const f of closed) { break; }
+        console.log((await closed.stats).stopped);
       })();
     `;
     const r = spawnSync(process.execPath, ["-e", script], { encoding: "utf8", timeout: 30_000 });
     expect(r.error).toBeUndefined();
     expect(r.status).toBe(0);
-    expect(r.stdout.trim()).toBe("841");
+    expect(r.stdout.trim().split("\n")).toEqual(["841", "true"]);
   });
 });

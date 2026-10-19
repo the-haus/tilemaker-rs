@@ -1,6 +1,10 @@
 // A pull-based stream over a native export. Each batch the consumer takes
 // grants the producer one more, so memory stays bounded by `readAhead`
 // batches however slow the consumer is.
+//
+// The native side keeps the event loop alive only while JS awaits a batch
+// (or the end of a closed stream): a stream that is abandoned half-read
+// does not keep the process running.
 
 import { Readable } from "node:stream";
 
@@ -35,6 +39,8 @@ export class OsmStream<T, S = ExportStats, P = Progress> implements AsyncIterabl
   #closed = false;
   #error: Error | undefined;
   #claimed = false;
+  #referenced = true;
+  #released = false;
   #emptyStats: (stopped: boolean) => S;
   #resolveStats!: (s: S) => void;
   #rejectStats!: (e: Error) => void;
@@ -60,6 +66,23 @@ export class OsmStream<T, S = ExportStats, P = Progress> implements AsyncIterabl
     this.stats.catch(() => undefined);
   }
 
+  /** Keep the event loop alive only while something waits on the native side. */
+  #updateRef(): void {
+    if (!this.#native || this.#released) return;
+    const wanted = this.#waiter !== undefined || (this.#closed && !this.#ended);
+    if (wanted !== this.#referenced) {
+      this.#referenced = wanted;
+      this.#native.setRef(wanted);
+    }
+  }
+
+  #release(): void {
+    if (!this.#native || this.#released) return;
+    this.#released = true;
+    this.#native.setRef(false);
+    this.#native.release();
+  }
+
   #onEvent = (event: NativeEvent): void => {
     switch (event.type) {
       case "batch": {
@@ -79,6 +102,7 @@ export class OsmStream<T, S = ExportStats, P = Progress> implements AsyncIterabl
         } else {
           this.#queue.push(records);
         }
+        this.#updateRef();
         return;
       }
       case "progress": {
@@ -90,6 +114,7 @@ export class OsmStream<T, S = ExportStats, P = Progress> implements AsyncIterabl
       }
       case "end":
         this.#ended = true;
+        this.#release();
         this.#resolveStats(event.stats as unknown as S);
         this.#wake();
         return;
@@ -104,6 +129,7 @@ export class OsmStream<T, S = ExportStats, P = Progress> implements AsyncIterabl
     this.#error = error;
     this.#ended = true;
     this.#native?.close();
+    this.#release();
     this.#rejectStats(error);
     if (this.#waiter) {
       const w = this.#waiter;
@@ -140,6 +166,7 @@ export class OsmStream<T, S = ExportStats, P = Progress> implements AsyncIterabl
     }
     this.#signal?.addEventListener("abort", this.#abort, { once: true });
     if (this.#closed) this.#native.close();
+    this.#updateRef();
   }
 
   async #next(): Promise<T[] | null> {
@@ -151,9 +178,11 @@ export class OsmStream<T, S = ExportStats, P = Progress> implements AsyncIterabl
     }
     if (this.#error) throw this.#error;
     if (this.#ended || this.#closed) return null;
-    return new Promise<T[] | null>((resolve, reject) => {
+    const p = new Promise<T[] | null>((resolve, reject) => {
       this.#waiter = { resolve, reject };
     });
+    this.#updateRef();
+    return p;
   }
 
   #claim(): void {
@@ -189,6 +218,8 @@ export class OsmStream<T, S = ExportStats, P = Progress> implements AsyncIterabl
     this.#signal?.removeEventListener("abort", this.#abort);
     if (this.#native) {
       this.#native.close();
+      // Stay alive until the end event arrives, so `stats` resolves.
+      this.#updateRef();
     } else if (!this.#ended) {
       // Never started: nothing ran.
       this.#ended = true;

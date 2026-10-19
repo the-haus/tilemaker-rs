@@ -116,6 +116,8 @@ export type NativeEvent =
 export interface NativeStream {
   request(n: number): void;
   close(): void;
+  setRef(referenced: boolean): void;
+  release(): void;
 }
 
 export interface NativeReader {
