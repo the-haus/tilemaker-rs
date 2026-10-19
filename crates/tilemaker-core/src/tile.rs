@@ -364,15 +364,9 @@ fn clip_compact(cp: &CompactPolygons, r: &Rect) -> MultiPolygon {
     let to_e7 = |v: f64| (v * 1e7).round() as i64;
     let (rx0, ry0, rx1, ry1) = (to_e7(r.min().x), to_e7(r.min().y), to_e7(r.max().x), to_e7(r.max().y));
     let mut out = Vec::new();
-    for rings in cp.polygons() {
+    for (rings, b) in cp.polygons().zip(cp.boxes.iter()) {
         let ext = rings[0];
-        let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
-        for p in ext {
-            x0 = x0.min(p.lon as i64);
-            x1 = x1.max(p.lon as i64);
-            y0 = y0.min(p.latp as i64);
-            y1 = y1.max(p.latp as i64);
-        }
+        let (x0, y0, x1, y1) = (b[0] as i64, b[1] as i64, b[2] as i64, b[3] as i64);
         if x1 < rx0 || x0 > rx1 || y1 < ry0 || y0 > ry1 {
             continue;
         }

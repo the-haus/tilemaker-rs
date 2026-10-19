@@ -80,6 +80,8 @@ pub struct CompactPolygons {
     /// Exclusive end of each polygon, in rings (its first ring is the
     /// exterior).
     pub polygons: Box<[u32]>,
+    /// Each polygon's exterior box: `[min lon, min latp, max lon, max latp]`.
+    pub boxes: Box<[[i32; 4]]>,
 }
 
 impl CompactPolygons {
@@ -95,11 +97,21 @@ impl CompactPolygons {
             }
             polygons.push(rings.len() as u32);
         }
-        Self {
+        let mut s = Self {
             coords: coords.into(),
             rings: rings.into(),
             polygons: polygons.into(),
-        }
+            boxes: Box::new([]),
+        };
+        s.boxes = s
+            .exteriors()
+            .map(|r| {
+                r.iter().fold([i32::MAX, i32::MAX, i32::MIN, i32::MIN], |b, p| {
+                    [b[0].min(p.lon), b[1].min(p.latp), b[2].max(p.lon), b[3].max(p.latp)]
+                })
+            })
+            .collect();
+        s
     }
 
     /// The rings of polygon `i` (exterior first).
