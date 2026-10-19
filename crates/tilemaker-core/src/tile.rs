@@ -471,6 +471,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn compact_clipping_matches_geo_clipping() {
+        use geo::Area;
+        let c = |x: f64, y: f64| Coord { x, y };
+        // A star with a hole, and a second square.
+        let star: Vec<Coord> = (0..=40)
+            .map(|i| {
+                let t = (i % 40) as f64 / 40.0 * std::f64::consts::TAU;
+                let r = if i % 2 == 0 { 1.0 } else { 0.5 };
+                c(r * t.cos(), r * t.sin())
+            })
+            .collect();
+        let hole: Vec<Coord> = vec![c(-0.1, -0.1), c(-0.1, 0.1), c(0.1, 0.1), c(0.1, -0.1), c(-0.1, -0.1)];
+        let mut mp = MultiPolygon::new(vec![
+            geo::Polygon::new(LineString::new(star), vec![LineString::new(hole)]),
+            geo::Polygon::new(
+                LineString::new(vec![c(3.0, 3.0), c(4.0, 3.0), c(4.0, 4.0), c(3.0, 4.0), c(3.0, 3.0)]),
+                vec![],
+            ),
+        ]);
+        tilemaker_geom::valid::orient_multipolygon(&mut mp);
+        let cp = CompactPolygons::from_geo(&mp);
+        let mut seed = 7u64;
+        let mut rnd = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64 * 6.0 - 1.5
+        };
+        for _ in 0..200 {
+            let (a, b, d, e) = (rnd(), rnd(), rnd(), rnd());
+            let r = Rect::new(c(a.min(d), b.min(e)), c(a.max(d), b.max(e)));
+            let ours = clip_compact(&cp, &r);
+            let theirs = tilemaker_geom::clip::clip_multipolygon(&cp.to_geo(), &r);
+            assert!((ours.unsigned_area() - theirs.unsigned_area()).abs() < 1e-9, "{r:?}");
+            assert_eq!(ours.0.len(), theirs.0.len(), "{r:?}");
+        }
+    }
+
+    #[test]
     fn reorders_lines() {
         let c = |x: f64| Coord { x, y: 0.0 };
         let mls = MultiLineString::new(vec![
