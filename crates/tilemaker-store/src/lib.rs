@@ -5,17 +5,20 @@
 //!   or in a dense memory-mapped file ([`NodeStore::dense_file`]) for
 //!   planet-sized inputs.
 //! * [`WayStore`]: way id → node locations.
+//! * [`RefStore`]: way id → node ids.
 //!
 //! Stores are filled concurrently (one call per decoded block), then
 //! frozen for lookups.
 
 mod ids;
 mod nodes;
+mod refs;
 mod ways;
 
 pub use ids::{IdSet, IdSetBuilder};
 pub use nodes::Location;
 pub use nodes::{NodeStore, NodeStoreBuilder};
+pub use refs::{RefBatch, RefStore, RefStoreBuilder};
 pub use ways::{WayBatch, WayStore, WayStoreBuilder};
 
 /// Errors from the stores.

@@ -17,14 +17,15 @@
 //! handed to a sink block by block; the sink can stop the export early.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use tilemaker_geom::assemble::{assemble_area, merge_ways};
 use tilemaker_geom::LatpLon;
 use tilemaker_pbf::{DecodeOptions, ElementType, Layout, PbfFile, PrimitiveBlock, Relation, Tags, Way};
 use tilemaker_store::{
-    IdSet, IdSetBuilder, Location, NodeStore, NodeStoreBuilder, WayBatch, WayStore, WayStoreBuilder,
+    IdSet, IdSetBuilder, Location, NodeStore, NodeStoreBuilder, RefBatch, RefStore, RefStoreBuilder, WayBatch,
+    WayStore, WayStoreBuilder,
 };
 
 use crate::area::ClosedWays;
@@ -277,25 +278,16 @@ struct Shared {
     needed_nodes: RwLock<IdSet>,
     nodes: RwLock<Option<NodeStoreBuilder>>,
     node_store: RwLock<Option<NodeStore>>,
-    /// Per block: the smallest and largest way id (from the ways scan).
-    way_ranges: Mutex<Vec<Option<(i64, i64)>>>,
+    /// Relation-only selections: needed ways' node ids, kept during the
+    /// ways scan so the ways need not be read a second time.
+    way_refs: RwLock<Option<RefStoreBuilder>>,
+    ref_store: RwLock<Option<RefStore>>,
     ways: RwLock<Option<WayStoreBuilder>>,
     way_store: RwLock<Option<WayStore>>,
     counters: Counters,
 }
 
 impl Shared {
-    fn note_way_range(&self, block: usize, b: &PrimitiveBlock) {
-        let (mut lo, mut hi) = (i64::MAX, i64::MIN);
-        for w in b.ways() {
-            lo = lo.min(w.id());
-            hi = hi.max(w.id());
-        }
-        if lo <= hi {
-            self.way_ranges.lock().unwrap()[block] = Some((lo, hi));
-        }
-    }
-
     fn in_bbox(&self, b: [f64; 4]) -> bool {
         match self.bbox {
             None => true,
@@ -370,7 +362,8 @@ pub fn export_features(
         needed_nodes: RwLock::new(IdSet::new()),
         nodes: RwLock::new(Some(new_node_builder(&c.node_storage)?)),
         node_store: RwLock::new(None),
-        way_ranges: Mutex::new(vec![None; file.blobs().len()]),
+        way_refs: RwLock::new(Some(RefStoreBuilder::new())),
+        ref_store: RwLock::new(None),
         ways: RwLock::new(Some(WayStoreBuilder::new())),
         way_store: RwLock::new(None),
         counters: Counters::default(),
@@ -421,22 +414,40 @@ pub fn export_features(
     freeze_set(&shared.needed_ways_builder, &shared.needed_ways);
     let any_needed_ways = !shared.needed_ways.read().unwrap().is_empty();
 
-    // 2. Ways scan.
+    // 2. Ways scan. When no way is selected for itself (only as a member
+    //    of selected relations), the needed ways' node ids are kept here and
+    //    the ways are not read again (pass 4 is skipped).
+    let refs_mode = !want_ways && !shared.locations_on_ways;
     if !runner.stopped && !shared.locations_on_ways && (want_ways || any_needed_ways) {
         let s = shared.clone();
-        runner.pass(Phase::ScanWays, only(ElementType::Way), &mut sink, move |i, b| {
-            s.note_way_range(i, b);
+        runner.pass(Phase::ScanWays, only(ElementType::Way), &mut sink, move |_, b| {
             let needed_ways = s.needed_ways.read().unwrap();
             let guard = s.needed_nodes_builder.read().unwrap();
             let set = guard.as_ref().unwrap();
+            let mut refs = RefBatch::new();
             for w in b.ways() {
                 let selected = want_ways && s.way_outputs(&w).is_some();
-                if selected || (any_needed_ways && needed_ways.contains(w.id())) {
+                let needed = any_needed_ways && needed_ways.contains(w.id());
+                if selected || needed {
                     set.insert_all(w.refs());
                 }
+                if refs_mode && needed {
+                    refs.push(w.id(), w.refs());
+                }
+            }
+            if !refs.is_empty() {
+                s.way_refs.read().unwrap().as_ref().unwrap().insert(refs);
             }
             Ok(Vec::new())
         })?;
+    }
+    if let Some(b) = shared.way_refs.write().unwrap().take() {
+        if refs_mode {
+            let store = b.freeze();
+            stats.stored_ways = store.len() as u64;
+            stats.store_bytes = store.heap_bytes() as u64;
+            *shared.ref_store.write().unwrap() = Some(store);
+        }
     }
     freeze_set(&shared.needed_nodes_builder, &shared.needed_nodes);
     let any_needed_nodes = !shared.needed_nodes.read().unwrap().is_empty();
@@ -486,18 +497,9 @@ pub fn export_features(
     *shared.needed_nodes.write().unwrap() = IdSet::new();
     freeze_nodes(&shared, &mut stats);
 
-    // 4. Ways. When only relations' member ways are wanted, blocks whose
-    //    way ids (seen in the scan) include none of them are not decoded.
-    if !runner.stopped && (want_ways || any_needed_ways) {
-        let mut blocks = runner.blocks(Phase::Ways);
-        if !want_ways {
-            let ranges = shared.way_ranges.lock().unwrap();
-            let needed = shared.needed_ways.read().unwrap();
-            blocks.retain(|&i| match ranges.get(i).copied().flatten() {
-                Some((lo, hi)) => needed.any_in_range(lo, hi),
-                None => true,
-            });
-        }
+    // 4. Ways (not needed when the scan kept the member ways' node ids).
+    if !runner.stopped && (want_ways || (any_needed_ways && !refs_mode)) {
+        let blocks = runner.blocks(Phase::Ways);
         let s = shared.clone();
         runner.pass_blocks(
             Phase::Ways,
@@ -575,7 +577,10 @@ pub fn export_features(
             },
         )?;
     }
-    drop(shared.node_store.write().unwrap().take());
+    if !refs_mode {
+        // (With way refs, relations resolve them against the node store.)
+        drop(shared.node_store.write().unwrap().take());
+    }
     *shared.needed_ways.write().unwrap() = IdSet::new();
     freeze_ways(&shared, &mut stats);
 
@@ -583,10 +588,24 @@ pub fn export_features(
     if !runner.stopped && want_rels {
         let s = shared.clone();
         runner.pass_relations(meta_opts(only(ElementType::Relation)), &mut sink, move |b, range| {
-            let store = s.way_store.read().unwrap();
-            let store = store.as_ref().unwrap();
+            let way_store = s.way_store.read().unwrap();
+            let way_store = way_store.as_ref().unwrap();
+            let ref_store = s.ref_store.read().unwrap();
+            let node_store = s.node_store.read().unwrap();
             let mut out = Vec::new();
             let mut buf = Vec::new();
+            let mut ids = Vec::new();
+            // A member way's locations, from the way store or from its node
+            // ids and the node store; `false` when unknown.
+            let mut way = |id: i64, buf: &mut Vec<Location>| -> bool {
+                match (ref_store.as_ref(), node_store.as_ref()) {
+                    (Some(rs), Some(ns)) => {
+                        buf.clear();
+                        rs.get_into(id, &mut ids) && ids.iter().all(|&n| ns.get(n).map(|l| buf.push(l)).is_some())
+                    }
+                    _ => way_store.get_into(id, buf),
+                }
+            };
             for r in range.map(|i| b.relation(i)) {
                 let Some(area) = s.relation_selected(&r) else { continue };
                 let mut ways: Vec<Vec<LatpLon>> = Vec::new();
@@ -598,7 +617,7 @@ pub fn export_features(
                     if m.kind != ElementType::Way || !seen.insert(m.id) {
                         continue;
                     }
-                    if store.get_into(m.id, &mut buf) {
+                    if way(m.id, &mut buf) {
                         // Topology only: lat goes in the latp slot unprojected.
                         ways.push(buf.iter().map(|&(lat, lon)| LatpLon { latp: lat, lon }).collect());
                     } else {
@@ -654,6 +673,8 @@ pub fn export_features(
         })?;
     }
     drop(shared.way_store.write().unwrap().take());
+    drop(shared.ref_store.write().unwrap().take());
+    drop(shared.node_store.write().unwrap().take());
 
     let k = &shared.counters;
     stats.points = k.points.load(Ordering::Relaxed);
@@ -694,7 +715,7 @@ fn freeze_nodes(shared: &Shared, stats: &mut ExportStats) {
 fn freeze_ways(shared: &Shared, stats: &mut ExportStats) {
     if let Some(b) = shared.ways.write().unwrap().take() {
         let store = b.freeze();
-        stats.stored_ways = store.len() as u64;
+        stats.stored_ways = stats.stored_ways.max(store.len() as u64);
         stats.store_bytes = stats.store_bytes.max(store.heap_bytes() as u64);
         *shared.way_store.write().unwrap() = Some(store);
     }

@@ -528,7 +528,7 @@ fn many_blocks_keep_order() {
 }
 
 #[test]
-fn ways_pass_skips_blocks_without_needed_ways() {
+fn relation_only_selections_read_ways_once() {
     // 3 blocks of ways; the only relation uses a way in the middle block.
     let path = temp("skip.osm.pbf");
     let mut w = PbfWriter::with_options(Vec::new(), sorted());
@@ -567,7 +567,8 @@ fn ways_pass_skips_blocks_without_needed_ways() {
     .unwrap();
     assert_eq!(features, 1);
     assert_eq!(totals[&Phase::ScanWays], 3);
-    assert_eq!(totals[&Phase::Ways], 1);
+    // The scan kept the member way's node ids: no second pass over ways.
+    assert!(!totals.contains_key(&Phase::Ways));
 }
 
 #[test]
