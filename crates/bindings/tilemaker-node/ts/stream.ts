@@ -15,6 +15,9 @@ type Starter = (callback: (event: NativeEvent) => void) => NativeStream | Promis
 
 // A stream dropped without being finished (no close(), no end) is closed
 // when it is garbage-collected: the native callback only holds it weakly.
+// While JS awaits a batch, though, the stream is reachable only through its
+// own pending promise, so it is pinned here until the batch arrives.
+const pinned = new Set<object>();
 const finalizer = new FinalizationRegistry<NativeStream>((n) => {
   try {
     n.close();
@@ -78,10 +81,15 @@ export class OsmStream<T, S = ExportStats, P = Progress> implements AsyncIterabl
     this.stats.catch(() => undefined);
   }
 
-  /** Keep the event loop alive only while something waits on the native side. */
+  /**
+   * Keep the event loop alive, and the stream reachable, only while
+   * something waits on the native side.
+   */
   #updateRef(): void {
     if (!this.#native || this.#released) return;
     const wanted = this.#waiter !== undefined || (this.#closed && !this.#ended);
+    if (wanted) pinned.add(this);
+    else pinned.delete(this);
     if (wanted !== this.#referenced) {
       this.#referenced = wanted;
       this.#native.setRef(wanted);
@@ -91,6 +99,7 @@ export class OsmStream<T, S = ExportStats, P = Progress> implements AsyncIterabl
   #release(): void {
     if (!this.#native || this.#released) return;
     this.#released = true;
+    pinned.delete(this);
     finalizer.unregister(this);
     this.#native.setRef(false);
     this.#native.release();

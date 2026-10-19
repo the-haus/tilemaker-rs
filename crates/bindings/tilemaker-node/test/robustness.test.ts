@@ -65,6 +65,31 @@ describe("robustness", () => {
     expect(r.stdout.trim()).toBe("841");
   });
 
+  it("keeps streams that are being awaited alive through garbage collection", () => {
+    const entry = resolve(__dirname, "..", "dist", "index.js");
+    // Collect garbage constantly while consumers wait for batches: an
+    // awaited stream is reachable only through its own pending promise.
+    const script = `
+      const { openPbf, streamElements } = require(${JSON.stringify(entry)});
+      const { createReadStream } = require("node:fs");
+      const timer = setInterval(() => global.gc(), 1);
+      (async () => {
+        const pbf = await openPbf(${JSON.stringify(fixture("grid.osm.pbf"))});
+        let total = 0;
+        for (let i = 0; i < 2; i++) {
+          total += (await pbf.features({ batchSize: 50, readAhead: 1 }).toArray()).length;
+          total += (await streamElements(createReadStream(${JSON.stringify(fixture("grid.osm.pbf"))}, { highWaterMark: 4096 }), { batchSize: 50 }).toArray()).length;
+        }
+        clearInterval(timer);
+        console.log(total);
+      })();
+    `;
+    const r = spawnSync(process.execPath, ["--expose-gc", "-e", script], { encoding: "utf8", timeout: 60_000 });
+    expect(r.error).toBeUndefined();
+    expect(r.stderr).toBe("");
+    expect(r.stdout.trim()).toBe(String(2 * (91_141 + 91_141)));
+  });
+
   it("keeps odd tag keys in GeoJSON", () => {
     const f: Feature = {
       type: "node",
