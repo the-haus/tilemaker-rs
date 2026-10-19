@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use mlua::{Lua, MultiValue, Value, Variadic};
 use tilemaker_geom::assemble::{multilinestring_from_ways, multipolygon_from_roles};
+use tilemaker_geom::compact::{CompactLines, CompactPolygons};
 use tilemaker_geom::coords::{latp2lat, LatpLon};
 use tilemaker_geom::measure;
 use tilemaker_geom::{ll_to_coord, ll_to_linestring, LineString, MultiLineString, MultiPolygon, Point, Polygon};
@@ -206,19 +207,18 @@ impl Context {
         let geometry = self.push_geometry(kind, |c| match kind {
             GeometryKind::Point => c.obj.location.map(OutputGeometry::Point),
             GeometryKind::LineString => {
-                let l = c.linestring();
-                (l.0.len() >= 2).then_some(OutputGeometry::LineString(l))
+                (c.obj.nodes.len() >= 2).then(|| OutputGeometry::LineString(c.obj.nodes.as_slice().into()))
             }
             GeometryKind::Polygon => {
                 if c.obj.kind == ObjectKind::Way && c.obj.nodes.len() < 3 {
                     return None;
                 }
                 let mp = c.multipolygon();
-                (!mp.0.is_empty()).then_some(OutputGeometry::MultiPolygon(mp))
+                (!mp.0.is_empty()).then(|| OutputGeometry::MultiPolygon(Arc::new(CompactPolygons::from_geo(&mp))))
             }
             GeometryKind::MultiLineString => {
                 let mls = c.multilinestring();
-                (!mls.0.is_empty()).then_some(OutputGeometry::MultiLineString(mls))
+                (!mls.0.is_empty()).then(|| OutputGeometry::MultiLineString(Arc::new(CompactLines::from_geo(&mls))))
             }
         });
         // An object whose geometry is unusable writes nothing, but later

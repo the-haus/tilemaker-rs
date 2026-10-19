@@ -12,6 +12,7 @@
 pub mod assemble;
 pub mod bbox;
 pub mod clip;
+pub mod compact;
 pub mod coords;
 pub mod measure;
 pub mod simplify;

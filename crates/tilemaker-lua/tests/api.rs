@@ -205,8 +205,8 @@ fn relations_scan_and_multipolygons() {
     assert_eq!(mp.outputs.len(), 1);
     match &mp.geometries[0] {
         OutputGeometry::MultiPolygon(m) => {
-            assert_eq!(m.0.len(), 1);
-            assert_eq!(m.0[0].interiors().len(), 1);
+            assert_eq!(m.len(), 1);
+            assert_eq!(m.to_geo().0[0].interiors().len(), 1);
         }
         other => panic!("{other:?}"),
     }
@@ -227,7 +227,7 @@ fn relations_scan_and_multipolygons() {
         .unwrap();
     assert_eq!(b.outputs[0].attributes[0].value, AttributeValue::String("2".into()));
     match &b.geometries[0] {
-        OutputGeometry::MultiLineString(m) => assert_eq!(m.0.len(), 1, "joined"),
+        OutputGeometry::MultiLineString(m) => assert_eq!(m.len(), 1, "joined"),
         other => panic!("{other:?}"),
     }
 }

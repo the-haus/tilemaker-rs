@@ -2,7 +2,8 @@
 
 use std::sync::Arc;
 
-use tilemaker_geom::{LatpLon, LineString, MultiLineString, MultiPolygon};
+use tilemaker_geom::compact::{CompactLines, CompactPolygons};
+use tilemaker_geom::LatpLon;
 
 /// An attribute value.
 #[derive(Clone, Debug, PartialEq)]
@@ -42,17 +43,18 @@ pub struct Attribute {
     pub min_zoom: u8,
 }
 
-/// The geometry of an output (lon/latp degrees).
+/// The geometry of an output, in compact fixed-point lon/latp (8 bytes a
+/// point): tiles are made from millions of these.
 #[derive(Clone, Debug)]
 pub enum OutputGeometry {
     /// A point.
     Point(LatpLon),
     /// A way as a line.
-    LineString(Arc<LineString>),
+    LineString(Arc<[LatpLon]>),
     /// A relation's ways as lines.
-    MultiLineString(Arc<MultiLineString>),
-    /// An area.
-    MultiPolygon(Arc<MultiPolygon>),
+    MultiLineString(Arc<CompactLines>),
+    /// An area (exteriors counter-clockwise, holes clockwise).
+    MultiPolygon(Arc<CompactPolygons>),
 }
 
 impl OutputGeometry {

@@ -4,11 +4,12 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use tilemaker_config::{Config, LayerDef};
-use tilemaker_geom::clip::{clip_linestring, clip_multipolygon};
+use tilemaker_geom::clip::clip_linestring;
+use tilemaker_geom::compact::{to_coords, CompactPolygons};
 use tilemaker_geom::coords::{meter2degp, tiley2latp, TileCoord};
 use tilemaker_geom::simplify::{simplify_linestring, simplify_multipolygon};
 use tilemaker_geom::valid::{orient_multipolygon, repair_multipolygon, union_many};
-use tilemaker_geom::{ll_to_coord, Coord, LineString, MultiLineString, MultiPolygon, TileBbox};
+use tilemaker_geom::{ll_to_coord, Coord, LineString, MultiLineString, MultiPolygon, Rect, TileBbox};
 use tilemaker_lua::{AttributeValue, GeometryKind, OutputGeometry};
 use tilemaker_mvt::{GeomType, LayerBuilder, TileBuilder, Value};
 
@@ -178,10 +179,12 @@ impl Renderer<'_> {
                     let mut mls = MultiLineString::new(Vec::new());
                     for &r in run {
                         match &self.data.geometries[self.data.objects[r as usize].geometry as usize] {
-                            OutputGeometry::LineString(ls) => clip_linestring(&ls.0, &bbox.clipping_box, &mut mls),
+                            OutputGeometry::LineString(ls) => {
+                                clip_linestring(&to_coords(ls), &bbox.clipping_box, &mut mls)
+                            }
                             OutputGeometry::MultiLineString(m) => {
-                                for ls in &m.0 {
-                                    clip_linestring(&ls.0, &bbox.clipping_box, &mut mls);
+                                for ls in m.lines() {
+                                    clip_linestring(&to_coords(ls), &bbox.clipping_box, &mut mls);
                                 }
                             }
                             _ => {}
@@ -198,7 +201,7 @@ impl Renderer<'_> {
                         if let OutputGeometry::MultiPolygon(mp) =
                             &self.data.geometries[self.data.objects[r as usize].geometry as usize]
                         {
-                            let c = clip_multipolygon(mp, &bbox.clipping_box);
+                            let c = clip_compact(mp, &bbox.clipping_box);
                             if !c.0.is_empty() {
                                 parts.push(c);
                             }
@@ -353,6 +356,48 @@ impl Renderer<'_> {
             f.add_property(&a.key, v);
         }
     }
+}
+
+/// Clip compact polygons to `r`: only polygons whose exterior's box meets
+/// `r` are converted, and those wholly inside are not clipped.
+fn clip_compact(cp: &CompactPolygons, r: &Rect) -> MultiPolygon {
+    let to_e7 = |v: f64| (v * 1e7).round() as i64;
+    let (rx0, ry0, rx1, ry1) = (to_e7(r.min().x), to_e7(r.min().y), to_e7(r.max().x), to_e7(r.max().y));
+    let mut out = Vec::new();
+    for rings in cp.polygons() {
+        let ext = rings[0];
+        let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+        for p in ext {
+            x0 = x0.min(p.lon as i64);
+            x1 = x1.max(p.lon as i64);
+            y0 = y0.min(p.latp as i64);
+            y1 = y1.max(p.latp as i64);
+        }
+        if x1 < rx0 || x0 > rx1 || y1 < ry0 || y0 > ry1 {
+            continue;
+        }
+        let inside = x0 >= rx0 && x1 <= rx1 && y0 >= ry0 && y1 <= ry1;
+        let ring = |lls: &[tilemaker_geom::LatpLon]| -> Vec<Coord> {
+            let c = to_coords(lls);
+            if inside {
+                c
+            } else {
+                tilemaker_geom::clip::clip_ring(&c, r)
+            }
+        };
+        let exterior = ring(ext);
+        if exterior.len() < 4 {
+            continue;
+        }
+        let holes = rings[1..]
+            .iter()
+            .map(|h| ring(h))
+            .filter(|h| h.len() >= 4)
+            .map(LineString::new)
+            .collect();
+        out.push(geo::Polygon::new(LineString::new(exterior), holes));
+    }
+    MultiPolygon::new(out)
 }
 
 fn distinct(ring: &[(i32, i32)]) -> usize {

@@ -4,6 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use tilemaker_geom::compact::to_coords;
 use tilemaker_geom::coords::{latp2tileyf, lon2tilexf, TileCoord, MAX_LATP, MIN_LATP};
 use tilemaker_geom::tiles::{fill_covered_tiles, insert_intermediate_tiles};
 use tilemaker_geom::{ll_to_coord, Coord, LatpLon};
@@ -112,24 +113,25 @@ fn cover(g: &OutputGeometry, z: u8) -> Coverage {
             let c = ll_to_coord(*p);
             return Coverage::Tiles(vec![tile_of(c, z)]);
         }
-        OutputGeometry::LineString(ls) => insert_intermediate_tiles(&ls.0, z, &mut set),
+        OutputGeometry::LineString(ls) => insert_intermediate_tiles(&to_coords(ls), z, &mut set),
         OutputGeometry::MultiLineString(mls) => {
-            for ls in &mls.0 {
-                insert_intermediate_tiles(&ls.0, z, &mut set);
+            for ls in mls.lines() {
+                insert_intermediate_tiles(&to_coords(ls), z, &mut set);
             }
         }
         OutputGeometry::MultiPolygon(mp) => {
+            let exteriors: Vec<Vec<Coord>> = mp.exteriors().map(to_coords).collect();
             let mut all = HashSet::new();
-            for p in &mp.0 {
+            for ext in &exteriors {
                 let mut s = HashSet::new();
-                insert_intermediate_tiles(&p.exterior().0, z, &mut s);
+                insert_intermediate_tiles(ext, z, &mut s);
                 let (min, max) = bounds(&s);
                 if (max.x - min.x + 1) as u64 * (max.y - min.y + 1) as u64 >= LARGE {
                     // Large: index by rectangle, all parts together.
                     let (mut min, mut max) = (min, max);
-                    for q in &mp.0 {
+                    for other in &exteriors {
                         let mut t = HashSet::new();
-                        insert_intermediate_tiles(&q.exterior().0, z, &mut t);
+                        insert_intermediate_tiles(other, z, &mut t);
                         let (a, b) = bounds(&t);
                         min = TileCoord::new(min.x.min(a.x), min.y.min(a.y));
                         max = TileCoord::new(max.x.max(b.x), max.y.max(b.y));
