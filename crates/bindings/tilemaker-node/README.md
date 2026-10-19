@@ -212,6 +212,30 @@ locations in a sparse, memory-mapped file (8 bytes per possible id, only
 touched pages use disk; the path must not exist and nothing is left
 behind) instead of RAM.
 
+## API reference
+
+| export | |
+|---|---|
+| `openPbf(path)` → `Promise<PbfReader>` | open and index a file |
+| `PbfReader` | `.header` (`PbfHeader`), `.blockCount`, `.size`, `.path`, `.elements(opts)`, `.features(opts)`, `.tiles(opts)`, `.writeTiles(opts)` |
+| `streamElements(path \| ByteSource, ElementOptions)` | elements from a path or from bytes |
+| `streamFeatures(path, FeatureOptions)` | features from a path |
+| `generateTiles(path, TileStreamOptions)` | tiles from a path |
+| `writeTiles(path, WriteTilesOptions)` → `Promise<TileStats>` | write a tileset |
+| `OsmStream<T>` | see [Streams](#streams) |
+| `toGeoJSON`, `geometryToGeoJSON`, `geoJSONSeq`, `polygonRings`, `bbox` | geometry helpers |
+| `version()` | the native library's version |
+| `OsmStreamError` | the error class |
+
+Types: `Element` = `NodeElement | WayElement | RelationElement` (with
+`Member`, `Meta`, `Tags`, `OsmType`); `Feature` with `Geometry` =
+`PointGeometry | LineStringGeometry | MultiLineStringGeometry |
+MultiPolygonGeometry`; `Tile`; options `CommonOptions`, `ElementOptions`,
+`FeatureOptions`, `TileOptions`, `TileStreamOptions`, `WriteTilesOptions`;
+results `ExportStats`, `TileStats`; progress `Progress` (`Phase`) and
+`TileProgress`; `GeoJSONFeature`, `GeoJSONGeometry`, `Position`;
+`ByteSource`. Every field is documented in the type declarations.
+
 ## Errors
 
 Invalid options, unreadable files and Lua errors reject with an
