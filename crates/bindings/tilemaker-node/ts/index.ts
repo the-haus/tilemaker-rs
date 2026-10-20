@@ -98,6 +98,7 @@ function nativeOptions(
     if (e.labelPoint !== undefined) out.enrich.labelPoint = e.labelPoint;
     if (e.bbox !== undefined) out.enrich.bbox = e.bbox;
     if (e.memberOf !== undefined) out.enrich.memberOf = Array.isArray(e.memberOf) ? [...e.memberOf] : e.memberOf;
+    if (e.within !== undefined) out.enrich.within = [...e.within];
   }
   if (o.recordSeparator !== undefined) out.recordSeparator = o.recordSeparator;
   return out;

@@ -27,7 +27,7 @@ pub use engine::{
     export_elements, export_elements_from_reader, export_features, export_features_with, CommonOptions, ElementOptions,
     Event, ExportStats, FeatureOptions, Flow, GeometryTypes, NodeStorage, Phase, Progress, Weight,
 };
-pub use enrich::{Enrich, Extras, Parent, Transform};
+pub use enrich::{Area, Enrich, Extras, Parent, Transform};
 pub use extract::{extract, ExtractOptions, ExtractStats, Region};
 pub use filter::{BlockFilter, FilterParseError, FilterSet, TagFilter};
 pub use geojson::{write_geojson_seq, GeoJsonOptions};

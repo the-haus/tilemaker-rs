@@ -251,6 +251,30 @@ pub fn write_feature(f: &Feature, out: &mut Vec<u8>) {
         ));
     }
 
+    if let Some(areas) = &x.within {
+        generated.push((
+            "@within",
+            Box::new(move |o: &mut Vec<u8>| {
+                o.push(b'[');
+                for (i, a) in areas.iter().enumerate() {
+                    if i > 0 {
+                        o.push(b',');
+                    }
+                    let _ = write!(o, "{{\"type\":\"{}\",\"id\":{},\"tags\":{{", a.kind.as_str(), a.id);
+                    for (k, (key, value)) in a.tags.iter().enumerate() {
+                        if k > 0 {
+                            o.push(b',');
+                        }
+                        string(o, key);
+                        o.push(b':');
+                        string(o, value);
+                    }
+                    o.extend_from_slice(b"}}");
+                }
+                o.push(b']');
+            }),
+        ));
+    }
     out.extend_from_slice(b"{\"type\":\"Feature\",\"id\":\"");
     let _ = write!(out, "{kind}/{}", f.id);
     out.extend_from_slice(b"\",\"properties\":{");

@@ -122,6 +122,11 @@ pub struct FeatureOptions {
     /// Give each feature the relations its element is a member of, of
     /// those these filters select (an empty set: every tagged relation).
     pub member_of: Option<FilterSet>,
+    /// Give each feature the areas (of the same file, selected by these
+    /// filters) that contain its representative point, smallest first:
+    /// a point, a line's midpoint, a polygon's label point. The areas'
+    /// tags follow the same tag selection as the features'.
+    pub within: Option<FilterSet>,
 }
 
 /// Options for [`export_elements`].
@@ -291,6 +296,8 @@ struct Shared {
     transform: Transform,
     enrich: Enrich,
     member_of: Option<FilterSet>,
+    /// The areas for `within`, indexed.
+    areas: Option<(crate::index::PolygonIndex, Vec<crate::enrich::Area>)>,
     /// Memberships per block (filled by the relations scan, then merged).
     parent_blocks: std::sync::Mutex<Vec<(usize, BlockParents)>>,
     parents: RwLock<Option<Parents>>,
@@ -345,6 +352,12 @@ impl Shared {
         };
         if let Some(p) = parents {
             extras.member_of = Some(p.of(kind, id));
+        }
+        if let Some((index, areas)) = &self.areas {
+            let found = crate::enrich::representative_point(&geometry)
+                .map(|[x, y]| index.lookup(x, y))
+                .unwrap_or_default();
+            extras.within = Some(found.into_iter().map(|i| areas[i as usize].clone()).collect());
         }
         let c = match geometry.kind {
             GeometryType::Point => &self.counters.points,
@@ -449,6 +462,10 @@ where
     let nthreads = threads(c.threads);
     let layout = file.layout()?;
     let gt = opts.geometry_types;
+    let areas = match &opts.within {
+        Some(f) => Some(index_areas(file, f, &c.tags, c.threads)?),
+        None => None,
+    };
     let shared = Arc::new(Shared {
         filters: c.filters.clone(),
         tags: c.tags.clone(),
@@ -461,6 +478,7 @@ where
         transform: opts.transform,
         enrich: opts.enrich,
         member_of: opts.member_of.clone(),
+        areas,
         parent_blocks: std::sync::Mutex::new(Vec::new()),
         parents: RwLock::new(None),
         needed_ways_builder: RwLock::new(Some(IdSetBuilder::new())),
@@ -839,6 +857,46 @@ where
     stats.stopped = runner.stopped;
     stats.elapsed_ms = started.elapsed().as_millis() as u64;
     Ok(stats)
+}
+
+/// The file's areas that `filters` select, indexed for `within`.
+fn index_areas(
+    file: &PbfFile,
+    filters: &FilterSet,
+    tags: &TagSelection,
+    threads: usize,
+) -> Result<(crate::index::PolygonIndex, Vec<crate::enrich::Area>), ExportError> {
+    let opts = FeatureOptions {
+        common: CommonOptions {
+            filters: filters.clone(),
+            tags: tags.clone(),
+            threads,
+            ..Default::default()
+        },
+        geometry_types: GeometryTypes {
+            points: false,
+            lines: false,
+            polygons: true,
+        },
+        ..Default::default()
+    };
+    let mut index = crate::index::PolygonIndex::new();
+    let mut areas = Vec::new();
+    export_features(file, &opts, |e| {
+        if let Event::Batch(fs) = e {
+            for f in fs {
+                index.add_geometry(&f.geometry);
+                areas.push(crate::enrich::Area {
+                    kind: f.kind,
+                    id: f.id,
+                    tags: f.tags.into(),
+                });
+            }
+        }
+        Flow::Continue
+    })?;
+    index.build();
+    Ok((index, areas))
 }
 
 fn freeze_set(builder: &RwLock<Option<IdSetBuilder>>, into: &RwLock<IdSet>) {

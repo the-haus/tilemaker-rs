@@ -24,6 +24,8 @@ pub struct EnrichOptions {
     pub bbox: Option<bool>,
     /// Parent relations: `true` for all, or filters selecting them.
     pub member_of: Option<Either<bool, Vec<String>>>,
+    /// Areas containing each feature: filters selecting them.
+    pub within: Option<Vec<String>>,
 }
 
 /// Options for `features()` and `elements()`. See the TypeScript docs.
@@ -178,6 +180,10 @@ pub(crate) fn features(o: &StreamOptions) -> Result<FeatureOptions> {
             bbox: flag(|e| e.bbox),
         },
         member_of,
+        within: match e.and_then(|e| e.within.as_ref()) {
+            Some(f) => Some(FilterSet::parse(f).map_err(|e| invalid(e.to_string()))?),
+            None => None,
+        },
     })
 }
 

@@ -135,6 +135,18 @@ struct MemberCols {
     tags: TagCols,
 }
 
+/// Containing areas: per feature a range of areas, listed once per batch
+/// with their tags.
+#[derive(Default)]
+struct AreaCols {
+    offsets: Vec<u32>,
+    areas: Vec<u32>,
+    index: HashMap<(u8, i64), u32>,
+    types: Vec<u8>,
+    ids: Vec<f64>,
+    tags: TagCols,
+}
+
 /// Computed values; a column exists when the stream computes it (the same
 /// for every feature).
 #[derive(Default)]
@@ -145,6 +157,7 @@ struct ExtraCols {
     label_point: Option<Vec<f64>>,
     bbox: Option<Vec<f64>>,
     members: Option<MemberCols>,
+    within: Option<AreaCols>,
 }
 
 impl ExtraCols {
@@ -180,6 +193,28 @@ impl ExtraCols {
             }
             m.offsets.push(m.relations.len() as u32);
         }
+        if let Some(areas) = &x.within {
+            let w = self.within.get_or_insert_with(|| AreaCols {
+                offsets: vec![0],
+                ..Default::default()
+            });
+            for a in areas {
+                let key = (kind_code(a.kind), a.id);
+                let i = match w.index.get(&key) {
+                    Some(&i) => i,
+                    None => {
+                        let i = w.ids.len() as u32;
+                        w.types.push(key.0);
+                        w.ids.push(a.id as f64);
+                        w.tags.push(&a.tags, strings);
+                        w.index.insert(key, i);
+                        i
+                    }
+                };
+                w.areas.push(i);
+            }
+            w.offsets.push(w.areas.len() as u32);
+        }
     }
 
     fn into_js(self, env: &Env, o: &mut JsObject) -> Result<()> {
@@ -203,6 +238,16 @@ impl ExtraCols {
             j.set("tagOffsets", Uint32Array::new(m.tags.offsets))?;
             j.set("tags", Uint32Array::new(m.tags.pairs))?;
             o.set("memberOf", j)?;
+        }
+        if let Some(w) = self.within {
+            let mut j = env.create_object()?;
+            j.set("offsets", Uint32Array::new(w.offsets))?;
+            j.set("areas", Uint32Array::new(w.areas))?;
+            j.set("types", Uint8Array::new(w.types))?;
+            j.set("ids", Float64Array::new(w.ids))?;
+            j.set("tagOffsets", Uint32Array::new(w.tags.offsets))?;
+            j.set("tags", Uint32Array::new(w.tags.pairs))?;
+            o.set("within", j)?;
         }
         Ok(())
     }

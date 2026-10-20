@@ -26,6 +26,7 @@ export interface NativeStreamOptions {
     labelPoint?: boolean;
     bbox?: boolean;
     memberOf?: boolean | string[];
+    within?: string[];
   };
   output?: string;
   recordSeparator?: boolean;
@@ -78,6 +79,14 @@ export interface NativeFeatureBatch {
     offsets: Uint32Array;
     relations: Uint32Array;
     roles: Uint32Array;
+    ids: Float64Array;
+    tagOffsets: Uint32Array;
+    tags: Uint32Array;
+  };
+  within?: {
+    offsets: Uint32Array;
+    areas: Uint32Array;
+    types: Uint8Array;
     ids: Float64Array;
     tagOffsets: Uint32Array;
     tags: Uint32Array;

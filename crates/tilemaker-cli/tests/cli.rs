@@ -219,6 +219,22 @@ fn export_enrichments_and_transforms() {
     assert_eq!(meadow["geometry"]["type"], "MultiPolygon");
     assert!(meadow["properties"]["@area"].as_f64().unwrap() > 1e6);
     assert_eq!(meadow["properties"]["@labelPoint"].as_array().unwrap().len(), 2);
+    // Places in their areas.
+    let o = bin()
+        .args([
+            "export",
+            pbf.to_str().unwrap(),
+            "-f",
+            "n/amenity",
+            "--within",
+            "r/landuse",
+        ])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let cafe: serde_json::Value = serde_json::from_slice(o.stdout.split(|&b| b == b'\n').next().unwrap()).unwrap();
+    assert_eq!(cafe["properties"]["@within"][0]["id"], 200);
+    assert_eq!(cafe["properties"]["@within"][0]["tags"]["landuse"], "meadow");
     // Unknown filters are errors.
     let o = bin()
         .args(["export", pbf.to_str().unwrap(), "--member-of", "=x"])

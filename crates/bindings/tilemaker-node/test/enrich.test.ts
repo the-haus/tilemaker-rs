@@ -71,6 +71,21 @@ describe("enrich", () => {
     expect(routes.get("way/100:LineString")!.memberOf!.map((p) => p.id)).toEqual([202]);
   });
 
+  it("places features in the areas they lie in with within", async () => {
+    const fs = await features({ enrich: { within: ["a/landuse", "a/building"] } });
+    // The café is in the meadow's hole but on the building.
+    expect(fs.get("node/20:Point")!.within!.map((a) => `${a.type}/${a.id}`)).toEqual(["way/101"]);
+    // The tree is outside both; the street's midpoint (0.5, 0) is on both edges.
+    expect(fs.get("node/14274176831:Point")!.within).toEqual([]);
+    const street = fs.get("way/100:LineString")!.within!;
+    expect(street.map((a) => a.id).sort()).toEqual([101, 200]);
+    expect(street.find((a) => a.id === 200)!.tags).toEqual({ type: "multipolygon", landuse: "meadow" });
+    // In GeoJSON: @within.
+    expect(toGeoJSON(fs.get("node/20:Point")!).properties["@within"]).toEqual([
+      { type: "way", id: 101, tags: { building: "yes" } },
+    ]);
+  });
+
   it("clips, simplifies and rounds geometries", async () => {
     const clipped = await features({ clip: [0, 0, 0.5, 0.5], enrich: { bbox: true } });
     expect(clipped.get("way/101:MultiPolygon")!.bbox).toEqual([0, 0, 0.5, 0.5]);
@@ -107,7 +122,15 @@ describe("writeGeoJSONSeq", () => {
   it("writes what toGeoJSON makes, without features crossing into JS", async () => {
     const options: FeatureOptions = {
       metadata: true,
-      enrich: { area: true, length: true, centroid: true, labelPoint: true, bbox: true, memberOf: true },
+      enrich: {
+        area: true,
+        length: true,
+        centroid: true,
+        labelPoint: true,
+        bbox: true,
+        memberOf: true,
+        within: ["a/landuse"],
+      },
     };
     const output = join(dir, "town.geojsonseq");
     const stats = await writeGeoJSONSeq(town, { ...options, output });

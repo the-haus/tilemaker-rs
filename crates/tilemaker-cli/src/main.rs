@@ -164,6 +164,10 @@ struct ExportArgs {
     /// filters select (none: all relations).
     #[arg(long, num_args = 0.., value_name = "FILTER")]
     member_of: Option<Vec<String>>,
+    /// Add @within: the areas of this file (selected by these filters, e.g.
+    /// r/admin_level=2,4) that contain each feature, smallest first.
+    #[arg(long, num_args = 1.., value_name = "FILTER")]
+    within: Option<Vec<String>>,
     /// Start each feature with a record separator (RFC 8142).
     #[arg(long)]
     record_separator: bool,
@@ -389,6 +393,7 @@ fn export(a: ExportArgs) -> Result<()> {
             bbox: a.feature_bbox,
         },
         member_of: a.member_of.as_deref().map(FilterSet::parse).transpose()?,
+        within: a.within.as_deref().map(FilterSet::parse).transpose()?,
     };
     let out: Box<dyn Write> = match &a.output {
         Some(p) => Box::new(std::fs::File::create(p).with_context(|| format!("creating {}", p.display()))?),

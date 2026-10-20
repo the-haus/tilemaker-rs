@@ -764,3 +764,24 @@ fn file_info_counts_and_ranges() {
         .unwrap();
     assert!(!d.objects_ordered && d.multiple_versions);
 }
+
+#[test]
+fn within_places_features_in_areas() {
+    let path = town(sorted());
+    let opts = FeatureOptions {
+        common: CommonOptions {
+            filters: filters(&["n/amenity", "n/shop"]),
+            ..Default::default()
+        },
+        within: Some(filters(&["a/landuse", "a/building"])),
+        ..Default::default()
+    };
+    let (fs, _) = features(&path, &opts);
+    let cafe = fs.iter().find(|f| f.id == 20).unwrap();
+    let within: Vec<i64> = cafe.extras.within.as_ref().unwrap().iter().map(|a| a.id).collect();
+    // The café at (0.5, 0.5): inside the building (way 101); in the meadow's
+    // hole (relation 200's 0.4–0.6 island), so not in the meadow.
+    assert_eq!(within, vec![101]);
+    let shop = fs.iter().find(|f| f.id == 21).unwrap();
+    assert_eq!(shop.extras.within, Some(vec![]));
+}

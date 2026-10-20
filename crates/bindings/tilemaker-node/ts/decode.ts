@@ -2,7 +2,7 @@
 // subarray views into the batch's typed arrays (no copying).
 
 import type { NativeElementBatch, NativeFeatureBatch, NativeMeta, NativeTileBatch } from "./native.js";
-import type { Element, Feature, Geometry, Member, Meta, OsmType, ParentRelation, Tags, Tile } from "./types.js";
+import type { AreaRef, Element, Feature, Geometry, Member, Meta, OsmType, ParentRelation, Tags, Tile } from "./types.js";
 
 const OSM_TYPES: readonly OsmType[] = ["node", "way", "relation"];
 
@@ -39,6 +39,10 @@ export function decodeFeatures(b: NativeFeatureBatch): Feature[] {
   const m = b.memberOf;
   // Each parent relation's tags, decoded once per batch.
   const parentTags: Tags[] = m ? Array.from(m.ids, (_, r) => tagsAt(b.strings, m.tagOffsets, m.tags, r)) : [];
+  const w = b.within;
+  const areas: AreaRef[] = w
+    ? Array.from(w.ids, (id, a) => ({ type: OSM_TYPES[w.types[a]!]!, id, tags: tagsAt(b.strings, w.tagOffsets, w.tags, a) }))
+    : [];
   for (let i = 0; i < n; i++) {
     const coordinates = b.coords.subarray(b.coordOffsets[i]!, b.coordOffsets[i + 1]!);
     let geometry: Geometry;
@@ -87,6 +91,7 @@ export function decodeFeatures(b: NativeFeatureBatch): Feature[] {
       }
       f.memberOf = parents;
     }
+    if (w) f.within = Array.from(w.areas.subarray(w.offsets[i]!, w.offsets[i + 1]!), (a) => areas[a]!);
     out[i] = f;
   }
   return out;

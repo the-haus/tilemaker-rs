@@ -96,6 +96,7 @@ export function toGeoJSON(f: Feature): GeoJSONFeature {
   if (f.centroid) set("@centroid", f.centroid);
   if (f.labelPoint) set("@labelPoint", f.labelPoint);
   if (f.memberOf) set("@memberOf", f.memberOf);
+  if (f.within) set("@within", f.within);
   const geometry = geometryToGeoJSON(f.geometry);
   const id = `${f.type}/${f.id}`;
   return f.bbox

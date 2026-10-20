@@ -44,6 +44,16 @@ pub struct Enrich {
     pub bbox: bool,
 }
 
+/// The point a feature is placed by: a point itself, a line's midpoint, a
+/// polygon's label point.
+pub fn representative_point(g: &Geometry) -> Option<[f64; 2]> {
+    match g.kind {
+        GeometryType::Point => Some([g.coords[0], g.coords[1]]),
+        GeometryType::LineString | GeometryType::MultiLineString => midpoint(&lines(g)),
+        GeometryType::MultiPolygon => label_point(&polygon_rings(g)),
+    }
+}
+
 impl Enrich {
     /// Whether anything is computed.
     pub fn any(&self) -> bool {
@@ -62,6 +72,17 @@ pub struct Parent {
     pub tags: std::sync::Arc<[(String, String)]>,
 }
 
+/// An area a feature lies in (with `within`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Area {
+    /// The element the area was made from.
+    pub kind: tilemaker_pbf::ElementType,
+    /// Its id.
+    pub id: i64,
+    /// Its tags.
+    pub tags: std::sync::Arc<[(String, String)]>,
+}
+
 /// Values computed for a feature.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Extras {
@@ -77,6 +98,9 @@ pub struct Extras {
     pub bbox: Option<[f64; 4]>,
     /// Relations the element is a member of (with `member_of`).
     pub member_of: Option<Vec<Parent>>,
+    /// Areas containing the feature's representative point, smallest
+    /// first (with `within`).
+    pub within: Option<Vec<Area>>,
 }
 
 impl Extras {
@@ -88,6 +112,7 @@ impl Extras {
             && self.label_point.is_none()
             && self.bbox.is_none()
             && self.member_of.is_none()
+            && self.within.is_none()
     }
 }
 

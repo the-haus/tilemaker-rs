@@ -67,6 +67,15 @@ export interface ParentRelation {
   tags: Tags;
 }
 
+/** An area a feature lies in (with `enrich.within`). */
+export interface AreaRef {
+  /** The element the area was made from. */
+  type: OsmType;
+  id: number;
+  /** Its tags (one object per area and batch). */
+  tags: Tags;
+}
+
 /** An assembled feature. */
 export interface Feature<G extends Geometry = Geometry> {
   /** The element it was made from. */
@@ -87,6 +96,8 @@ export interface Feature<G extends Geometry = Geometry> {
   bbox?: [number, number, number, number];
   /** With `enrich.memberOf`: the relations the element belongs to. */
   memberOf?: ParentRelation[];
+  /** With `enrich.within`: the areas containing the feature (its point, line midpoint or label point), smallest first. */
+  within?: AreaRef[];
 }
 
 export interface NodeElement {
@@ -419,6 +430,15 @@ export interface EnrichOptions {
    * their memberships, so narrow it on large files.
    */
   memberOf?: boolean | string[];
+  /**
+   * `within`: the areas of the same file that these filters select
+   * (e.g. `["r/admin_level=2,4"]`) and that contain each feature's point
+   * (a line's midpoint, a polygon's label point), smallest first — a
+   * reverse-geocoding join in one pass. The areas are read first, in their
+   * own passes, and keep the tags `tags` selects. For lookups of your own,
+   * see {@link PolygonIndex}.
+   */
+  within?: string[];
 }
 
 export interface FeatureOptions extends CommonOptions {
