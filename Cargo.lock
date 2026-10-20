@@ -1111,6 +1111,7 @@ version = "0.1.0"
 dependencies = [
  "geo",
  "polylabel",
+ "rstar",
  "serde",
  "serde_json",
  "thiserror",

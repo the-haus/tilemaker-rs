@@ -19,5 +19,6 @@ serde.workspace = true
 serde_json.workspace = true
 geo.workspace = true
 polylabel.workspace = true
+rstar.workspace = true
 
 [dev-dependencies]

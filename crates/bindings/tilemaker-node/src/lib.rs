@@ -11,6 +11,7 @@ mod batch;
 mod credits;
 mod input;
 mod options;
+mod polygon_index;
 mod stream;
 mod tiles;
 
@@ -22,6 +23,7 @@ use tilemaker_export::{export_elements, export_features, PbfFile};
 use batch::{ElementBatch, FeatureBatch};
 use options::invalid;
 pub use options::StreamOptions;
+pub use polygon_index::NativePolygonIndex;
 pub use stream::NativeStream;
 use stream::StreamEvent;
 pub use tiles::TileStreamOptions;

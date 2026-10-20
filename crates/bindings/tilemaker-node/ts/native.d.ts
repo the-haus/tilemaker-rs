@@ -175,6 +175,17 @@ export interface NativeExtractOptions {
   threads?: number;
 }
 
+export class NativePolygonIndex {
+  constructor();
+  add(coords: Float64Array, parts: Uint32Array, polygons: Uint32Array): number;
+  build(): void;
+  readonly size: number;
+  area(i: number): number;
+  lookup(lon: number, lat: number): Uint32Array;
+  smallest(lon: number, lat: number): number;
+  smallestMany(points: Float64Array, threads?: number): Promise<Int32Array>;
+}
+
 export function open(path: string): Promise<NativeReader>;
 export function elementsFromInput(options: NativeStreamOptions, callback: (event: NativeEvent) => void): NativeStream;
 export function version(): string;

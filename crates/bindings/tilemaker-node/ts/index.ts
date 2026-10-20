@@ -56,6 +56,7 @@ import {
 
 export * from "./types.js";
 export { OsmStream } from "./stream.js";
+export { PolygonIndex, type PolygonEntry } from "./polygon-index.js";
 export {
   bbox,
   geoJSONSeq,
