@@ -37,6 +37,17 @@ fn monaco_counts_match_osmium() {
     let layout = f.layout().unwrap();
     assert_eq!(layout.relations.end, f.blobs().len());
     assert!(layout.nodes.end <= layout.ways.start + 1);
+    // Probing first elements agrees with decoding.
+    for i in 0..f.blobs().len() {
+        let b = f.decode_block(i, DecodeOptions::ALL).unwrap();
+        let want = b
+            .nodes()
+            .next()
+            .map(|n| (ElementType::Node, n.id()))
+            .or_else(|| b.ways().next().map(|w| (ElementType::Way, w.id())))
+            .or_else(|| b.relations().next().map(|r| (ElementType::Relation, r.id())));
+        assert_eq!(f.first_element(i).unwrap(), want, "block {i}");
+    }
 }
 
 #[test]

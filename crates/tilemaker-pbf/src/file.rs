@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::blob::{decompress_blob, parse_blob_header, read_exact_or_eof, BlobInfo, BlobKind, MAX_HEADER_SIZE};
-use crate::block::{BlockKinds, DecodeOptions, PrimitiveBlock};
+use crate::block::{first_element, BlockKinds, DecodeOptions, ElementType, PrimitiveBlock};
 use crate::header::Header;
 use crate::parallel::{ordered_map, OrderedMap};
 use crate::Error;
@@ -21,7 +21,11 @@ pub struct PbfFile {
     blobs: Arc<Vec<BlobInfo>>,
     len: u64,
     kinds: Arc<Mutex<Vec<Option<BlockKinds>>>>,
+    firsts: Arc<Mutex<Vec<Option<FirstElement>>>>,
 }
+
+/// A block's first element, `None` when it has none.
+type FirstElement = Option<(ElementType, i64)>;
 
 /// Which blocks hold which element types.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -93,6 +97,7 @@ impl PbfFile {
             blobs: Arc::new(blobs),
             len,
             kinds: Arc::new(Mutex::new(vec![None; n])),
+            firsts: Arc::new(Mutex::new(vec![None; n])),
         })
     }
 
@@ -154,6 +159,61 @@ impl PbfFile {
             metadata: false,
         };
         Ok(self.decode_block(index, opts)?.kinds())
+    }
+
+    /// The type and id of a block's first element, inflating only the
+    /// start of the block (its string table and a few bytes more).
+    pub fn first_element(&self, index: usize) -> Result<Option<(ElementType, i64)>, Error> {
+        if let Some(f) = self.firsts.lock().unwrap().get(index).copied().flatten() {
+            return Ok(f);
+        }
+        let info = self
+            .blobs
+            .get(index)
+            .ok_or(Error::Corrupt("block index out of range"))?;
+        let f = first_element(&self.read_blob(info)?)?;
+        self.firsts.lock().unwrap()[index] = Some(f);
+        Ok(f)
+    }
+
+    /// Of the blocks in `range` (all holding elements of `kind` in a file
+    /// sorted by type then id), those whose ids may include one that
+    /// `wanted(lo, hi)` asks for, from each block's first id and the next
+    /// one's. Blocks starting with another type are always kept; unsorted
+    /// files keep everything. Probes run on `threads` workers.
+    pub fn blocks_with_ids(
+        &self,
+        range: Range<usize>,
+        kind: ElementType,
+        threads: usize,
+        wanted: impl Fn(i64, i64) -> bool,
+    ) -> Result<Vec<usize>, Error> {
+        let range = range.start.min(self.blobs.len())..range.end.min(self.blobs.len());
+        if !self.header.is_sorted() || range.is_empty() {
+            return Ok(range.collect());
+        }
+        // The next block bounds the last one's ids.
+        let probe: Vec<usize> = (range.start..(range.end + 1).min(self.blobs.len())).collect();
+        let me = self.clone();
+        let firsts: Vec<FirstElement> =
+            ordered_map(probe, threads, threads * 4, move |i| me.first_element(i)).collect::<Result<_, _>>()?;
+        let mut out = Vec::new();
+        for (k, i) in range.enumerate() {
+            let keep = match firsts[k] {
+                Some((t, lo)) if t == kind => {
+                    let hi = match firsts.get(k + 1).copied().flatten() {
+                        Some((t, next)) if t == kind => next.saturating_sub(1),
+                        _ => i64::MAX,
+                    };
+                    lo > hi || wanted(lo, hi)
+                }
+                _ => true,
+            };
+            if keep {
+                out.push(i);
+            }
+        }
+        Ok(out)
     }
 
     /// Decode `range` of blocks on `threads` workers, yielding

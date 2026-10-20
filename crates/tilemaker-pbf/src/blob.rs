@@ -128,6 +128,55 @@ pub fn decompress_blob(buf: &[u8], out: &mut Vec<u8>) -> Result<(), Error> {
     Ok(())
 }
 
+/// The first bytes of a blob's data, decompressed only as far as asked
+/// (zlib streams are inflated incrementally; other codecs whole).
+pub(crate) struct Prefix<'a> {
+    inflater: Option<(flate2::Decompress, &'a [u8])>,
+    pub(crate) out: Vec<u8>,
+}
+
+impl<'a> Prefix<'a> {
+    pub(crate) fn new(buf: &'a [u8]) -> Result<Self, Error> {
+        let mut r = Reader::new(buf);
+        while let Some((field, wire)) = r.field()? {
+            match (field, wire) {
+                (3, LEN) => {
+                    return Ok(Self {
+                        inflater: Some((flate2::Decompress::new(true), r.bytes()?)),
+                        out: Vec::new(),
+                    })
+                }
+                (1 | 4 | 5 | 6 | 7, LEN) => break,
+                _ => r.skip(wire)?,
+            }
+        }
+        let mut out = Vec::new();
+        decompress_blob(buf, &mut out)?;
+        Ok(Self { inflater: None, out })
+    }
+
+    /// Make at least `n` bytes available (fewer only at the end of the
+    /// data); `false` when there are fewer.
+    pub(crate) fn ensure(&mut self, n: usize) -> Result<bool, Error> {
+        let Some((z, data)) = &mut self.inflater else {
+            return Ok(self.out.len() >= n);
+        };
+        while self.out.len() < n {
+            let want = n.max(self.out.len() * 2).clamp(4096, MAX_BLOB_SIZE);
+            self.out.reserve(want - self.out.len());
+            let before = z.total_out();
+            let consumed = z.total_in() as usize;
+            let status = z
+                .decompress_vec(&data[consumed..], &mut self.out, flate2::FlushDecompress::None)
+                .map_err(|e| Error::Decompress(e.to_string()))?;
+            if status == flate2::Status::StreamEnd || z.total_out() == before {
+                return Ok(self.out.len() >= n);
+            }
+        }
+        Ok(true)
+    }
+}
+
 /// Reads blobs one after another from any byte stream (a file, stdin, a
 /// socket). For random access use [`crate::PbfFile`].
 pub struct BlobReader<R> {

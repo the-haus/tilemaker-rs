@@ -424,28 +424,39 @@ pub fn export_features(
     //    the ways are not read again (pass 4 is skipped).
     let refs_mode = !want_ways && !shared.locations_on_ways;
     if !runner.stopped && !shared.locations_on_ways && (want_ways || any_needed_ways) {
+        let blocks = if want_ways {
+            runner.blocks(Phase::ScanWays)
+        } else {
+            runner.blocks_holding(Phase::ScanWays, &shared.needed_ways.read().unwrap())?
+        };
         let s = shared.clone();
-        runner.pass(Phase::ScanWays, only(ElementType::Way), &mut sink, move |_, b| {
-            let needed_ways = s.needed_ways.read().unwrap();
-            let guard = s.needed_nodes_builder.read().unwrap();
-            let set = guard.as_ref().unwrap();
-            let mut refs = RefBatch::new();
-            let bf = s.filters.for_block(b);
-            for w in b.ways() {
-                let selected = want_ways && s.way_outputs(&w, &bf).is_some();
-                let needed = any_needed_ways && needed_ways.contains(w.id());
-                if selected || needed {
-                    set.insert_all(w.refs());
+        runner.pass_blocks(
+            Phase::ScanWays,
+            blocks,
+            only(ElementType::Way),
+            &mut sink,
+            move |_, b| {
+                let needed_ways = s.needed_ways.read().unwrap();
+                let guard = s.needed_nodes_builder.read().unwrap();
+                let set = guard.as_ref().unwrap();
+                let mut refs = RefBatch::new();
+                let bf = s.filters.for_block(b);
+                for w in b.ways() {
+                    let selected = want_ways && s.way_outputs(&w, &bf).is_some();
+                    let needed = any_needed_ways && needed_ways.contains(w.id());
+                    if selected || needed {
+                        set.insert_all(w.refs());
+                    }
+                    if refs_mode && needed {
+                        refs.push(w.id(), w.refs());
+                    }
                 }
-                if refs_mode && needed {
-                    refs.push(w.id(), w.refs());
+                if !refs.is_empty() {
+                    s.way_refs.read().unwrap().as_ref().unwrap().insert(refs);
                 }
-            }
-            if !refs.is_empty() {
-                s.way_refs.read().unwrap().as_ref().unwrap().insert(refs);
-            }
-            Ok(Vec::new())
-        })?;
+                Ok(Vec::new())
+            },
+        )?;
     }
     if let Some(b) = shared.way_refs.write().unwrap().take() {
         if refs_mode {
@@ -460,9 +471,15 @@ pub fn export_features(
 
     // 3. Nodes.
     if !runner.stopped && (want_points || any_needed_nodes) {
+        let blocks = if want_points {
+            runner.blocks(Phase::Nodes)
+        } else {
+            runner.blocks_holding(Phase::Nodes, &shared.needed_nodes.read().unwrap())?
+        };
         let s = shared.clone();
-        runner.pass(
+        runner.pass_blocks(
             Phase::Nodes,
+            blocks,
             meta_opts(only(ElementType::Node)),
             &mut sink,
             move |_, b| {
@@ -506,7 +523,11 @@ pub fn export_features(
 
     // 4. Ways (not needed when the scan kept the member ways' node ids).
     if !runner.stopped && (want_ways || (any_needed_ways && !refs_mode)) {
-        let blocks = runner.blocks(Phase::Ways);
+        let blocks = if want_ways {
+            runner.blocks(Phase::Ways)
+        } else {
+            runner.blocks_holding(Phase::Ways, &shared.needed_ways.read().unwrap())?
+        };
         let s = shared.clone();
         runner.pass_blocks(
             Phase::Ways,
@@ -908,6 +929,25 @@ impl Runner<'_> {
         range.collect()
     }
 
+    /// The blocks a pass reads when it only needs the elements in `ids`:
+    /// in sorted files, those whose id ranges hold one (found by inflating
+    /// just the start of each block).
+    fn blocks_holding(&self, phase: Phase, ids: &IdSet) -> Result<Vec<usize>, ExportError> {
+        let kind = match phase {
+            Phase::Nodes => ElementType::Node,
+            Phase::ScanWays | Phase::Ways => ElementType::Way,
+            _ => ElementType::Relation,
+        };
+        let range = self.blocks(phase);
+        let range = match (range.first(), range.last()) {
+            (Some(&a), Some(&b)) => a..b + 1,
+            _ => return Ok(range),
+        };
+        Ok(self
+            .file
+            .blocks_with_ids(range, kind, self.threads, |lo, hi| ids.any_in_range(lo, hi))?)
+    }
+
     fn pass<T: Send + 'static>(
         &mut self,
         phase: Phase,
@@ -1129,25 +1169,36 @@ pub fn export_elements(
 
     if need_store {
         // Nodes (storing locations), then ways and relations.
+        let blocks = if opts.nodes && c.filters.may_select(ElementType::Node) {
+            runner.blocks(Phase::Nodes)
+        } else {
+            runner.blocks_holding(Phase::Nodes, &shared.needed_nodes.read().unwrap())?
+        };
         let s = shared.clone();
-        runner.pass(Phase::Nodes, decode(true, false, false), &mut sink, move |_, b| {
-            let needed = s.needed_nodes.read().unwrap();
-            let mut batch = Vec::new();
-            let mut out = Vec::new();
-            let bf = s.filters.for_block(b);
-            for n in b.nodes() {
-                if needed.contains(n.id()) {
-                    batch.push((n.id(), (n.lat_e7(), n.lon_e7())));
+        runner.pass_blocks(
+            Phase::Nodes,
+            blocks,
+            decode(true, false, false),
+            &mut sink,
+            move |_, b| {
+                let needed = s.needed_nodes.read().unwrap();
+                let mut batch = Vec::new();
+                let mut out = Vec::new();
+                let bf = s.filters.for_block(b);
+                for n in b.nodes() {
+                    if needed.contains(n.id()) {
+                        batch.push((n.id(), (n.lat_e7(), n.lon_e7())));
+                    }
+                    if let Some(e) = s.node(&n, &bf) {
+                        out.push(e);
+                    }
                 }
-                if let Some(e) = s.node(&n, &bf) {
-                    out.push(e);
+                if !batch.is_empty() {
+                    s.builder.read().unwrap().as_ref().unwrap().insert(&mut batch)?;
                 }
-            }
-            if !batch.is_empty() {
-                s.builder.read().unwrap().as_ref().unwrap().insert(&mut batch)?;
-            }
-            Ok(out)
-        })?;
+                Ok(out)
+            },
+        )?;
         *shared.needed_nodes.write().unwrap() = IdSet::new();
         if let Some(b) = shared.builder.write().unwrap().take() {
             let store = b.freeze();

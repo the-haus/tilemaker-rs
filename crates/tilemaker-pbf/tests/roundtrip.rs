@@ -460,3 +460,65 @@ fn zstd_and_lz4_blobs() {
     let l = recompress(&plain, 6, lz4_flex::block::compress);
     assert_eq!(count(&l), want);
 }
+
+/// The first element of every block, as decoding finds it.
+fn decoded_firsts(file: &PbfFile) -> Vec<Option<(ElementType, i64)>> {
+    (0..file.blobs().len())
+        .map(|i| {
+            let b = file.decode_block(i, DecodeOptions::ALL).unwrap();
+            let first = b
+                .nodes()
+                .next()
+                .map(|n| (ElementType::Node, n.id()))
+                .or_else(|| b.ways().next().map(|w| (ElementType::Way, w.id())))
+                .or_else(|| b.relations().next().map(|r| (ElementType::Relation, r.id())));
+            first
+        })
+        .collect()
+}
+
+#[test]
+fn first_elements_from_partial_inflation() {
+    for (name, opts) in [
+        (
+            "firsts.osm.pbf",
+            WriterOptions {
+                sorted: true,
+                ..Default::default()
+            },
+        ),
+        (
+            "firsts-raw.osm.pbf",
+            WriterOptions {
+                sorted: true,
+                uncompressed: true,
+                ..Default::default()
+            },
+        ),
+    ] {
+        let path = temp_path(name);
+        std::fs::write(&path, write_sample(opts, 30_000)).unwrap();
+        let file = PbfFile::open(&path).unwrap();
+        let want = decoded_firsts(&file);
+        let got: Vec<_> = (0..file.blobs().len())
+            .map(|i| file.first_element(i).unwrap())
+            .collect();
+        assert_eq!(got, want);
+        assert!(got.iter().any(|f| matches!(f, Some((ElementType::Way, _)))));
+        // Blocks whose id range holds a wanted id.
+        let layout = file.layout().unwrap();
+        let ways = file
+            .blocks_with_ids(layout.ways.clone(), ElementType::Way, 2, |lo, hi| {
+                lo <= 1500 && 1500 <= hi
+            })
+            .unwrap();
+        assert_eq!(ways.len(), 1);
+        let b = file.decode_block(ways[0], DecodeOptions::ALL).unwrap();
+        assert!(b.ways().any(|w| w.id() == 1500));
+        let nodes = file
+            .blocks_with_ids(layout.nodes.clone(), ElementType::Node, 2, |_, _| false)
+            .unwrap();
+        assert!(nodes.is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+}

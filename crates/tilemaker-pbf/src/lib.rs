@@ -10,8 +10,8 @@
 //! * [`PbfWriter`] writes PBF files (used heavily by the tests).
 //!
 //! Supported: dense and plain nodes, ways (with `LocationsOnWays`),
-//! relations, metadata, raw and zlib blobs. Not supported: lzma, lz4 and
-//! zstd blobs (rare in practice; reported as [`Error::Unsupported`]).
+//! relations, metadata, raw, zlib, zstd and lz4 blobs. Not supported:
+//! lzma and bzip2 blobs (reported as [`Error::Unsupported`]).
 
 mod blob;
 mod block;

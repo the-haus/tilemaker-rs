@@ -675,6 +675,97 @@ impl PrimitiveBlock {
     }
 }
 
+/// The type and id of the first element of a block, decompressing only
+/// as much of it as that takes (the string table and a few bytes).
+pub(crate) fn first_element(blob: &[u8]) -> Result<Option<(ElementType, i64)>, Error> {
+    let mut p = crate::blob::Prefix::new(blob)?;
+    // A varint at `pos`, inflating as needed; `None` past the end.
+    fn varint(p: &mut crate::blob::Prefix<'_>, pos: &mut usize) -> Result<Option<u64>, Error> {
+        p.ensure(*pos + 10)?;
+        let mut r = Reader::new(p.out.get(*pos..).unwrap_or(&[]));
+        if r.is_empty() {
+            return Ok(None);
+        }
+        let v = r.varint()?;
+        *pos += r.position();
+        Ok(Some(v))
+    }
+    // Walk to the first field `want` (LEN) of the message at `pos..end`;
+    // returns the field's start.
+    fn find(
+        p: &mut crate::blob::Prefix<'_>,
+        mut pos: usize,
+        end: usize,
+        want: u32,
+    ) -> Result<Option<(usize, usize, u8)>, Error> {
+        while pos < end {
+            let Some(key) = varint(p, &mut pos)? else {
+                return Ok(None);
+            };
+            let (field, wire) = ((key >> 3) as u32, (key & 7) as u8);
+            if field == want {
+                return Ok(Some((pos, end, wire)));
+            }
+            match wire {
+                0 => {
+                    varint(p, &mut pos)?;
+                }
+                1 => pos += 8,
+                2 => {
+                    let Some(len) = varint(p, &mut pos)? else {
+                        return Ok(None);
+                    };
+                    pos += len as usize;
+                }
+                5 => pos += 4,
+                _ => return Err(Error::Corrupt("unsupported wire type")),
+            }
+        }
+        Ok(None)
+    }
+    // The group: field 2 of the block.
+    let Some((mut pos, _, LEN)) = find(&mut p, 0, usize::MAX, 2)? else {
+        return Ok(None);
+    };
+    let Some(glen) = varint(&mut p, &mut pos)? else {
+        return Ok(None);
+    };
+    let gend = pos + glen as usize;
+    // Its first element.
+    let Some(key) = varint(&mut p, &mut pos)? else {
+        return Ok(None);
+    };
+    let (kind, wire) = ((key >> 3) as u32, (key & 7) as u8);
+    if wire != LEN || !(1..=4).contains(&kind) || pos > gend {
+        return Ok(None);
+    }
+    let Some(elen) = varint(&mut p, &mut pos)? else {
+        return Ok(None);
+    };
+    let eend = pos + elen as usize;
+    let Some((mut pos, _, wire)) = find(&mut p, pos, eend, 1)? else {
+        return Ok(None);
+    };
+    let id = match (kind, wire) {
+        // Dense nodes: the first of the packed, delta-coded ids.
+        (2, LEN) => {
+            let Some(_) = varint(&mut p, &mut pos)? else {
+                return Ok(None);
+            };
+            varint(&mut p, &mut pos)?.map(zigzag)
+        }
+        (1, 0) => varint(&mut p, &mut pos)?.map(zigzag),
+        (3 | 4, 0) => varint(&mut p, &mut pos)?.map(|v| v as i64),
+        _ => None,
+    };
+    let kind = match kind {
+        1 | 2 => ElementType::Node,
+        3 => ElementType::Way,
+        _ => ElementType::Relation,
+    };
+    Ok(id.map(|id| (kind, id)))
+}
+
 /// Buffers reused across a block's elements.
 #[derive(Default)]
 struct Scratch {

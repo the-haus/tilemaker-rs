@@ -566,7 +566,8 @@ fn relation_only_selections_read_ways_once() {
     })
     .unwrap();
     assert_eq!(features, 1);
-    assert_eq!(totals[&Phase::ScanWays], 3);
+    // Of the 3 way blocks only the one holding way 12,000 is read.
+    assert_eq!(totals[&Phase::ScanWays], 1);
     // The scan kept the member way's node ids: no second pass over ways.
     assert!(!totals.contains_key(&Phase::Ways));
 }

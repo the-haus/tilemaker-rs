@@ -20,6 +20,12 @@ impl<'a> Reader<'a> {
         Self { buf, pos: 0 }
     }
 
+    /// Bytes consumed.
+    #[inline]
+    pub(crate) fn position(&self) -> usize {
+        self.pos
+    }
+
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
         self.pos >= self.buf.len()
