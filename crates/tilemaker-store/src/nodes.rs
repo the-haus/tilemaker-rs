@@ -1,9 +1,10 @@
 //! Node locations.
 //!
 //! The in-memory store keeps each block's nodes sorted, in groups of 16:
-//! one full id per group, the rest as varint deltas, and the locations as
-//! fixed (lat, lon) pairs. That is about ten bytes a node, and a lookup is a
-//! binary search plus at most 15 varint decodes.
+//! the group's first id and location in full, then for each further node
+//! the id delta and the location's (zigzag) deltas as varints. Nodes with
+//! neighbouring ids are usually close together, so that is about six
+//! bytes a node, and a lookup is a binary search plus at most 15 decodes.
 //!
 //! The dense file store maps `id × 8` bytes of a sparse file into memory, as
 //! osmium's `dense_mmap_array` does: constant-time lookups and no per-node
@@ -28,84 +29,109 @@ const GROUP: usize = 16;
 struct Chunk {
     first_id: i64,
     last_id: i64,
-    /// Per group: (first id, byte offset of the group's deltas).
-    /// Per group: the first id, and where its deltas start.
+    len: usize,
+    /// Per group: the first id and location, and where the deltas of the
+    /// group's other nodes start.
     group_ids: Vec<i64>,
+    group_locs: Vec<Location>,
     group_offsets: Vec<u32>,
     deltas: Vec<u8>,
-    locs: Vec<Location>,
+}
+
+#[inline]
+fn zz(v: i64) -> u64 {
+    ((v << 1) ^ (v >> 63)) as u64
+}
+
+#[inline]
+fn unzz(v: u64) -> i64 {
+    ((v >> 1) as i64) ^ -((v & 1) as i64)
 }
 
 impl Chunk {
     fn build(entries: &[(i64, Location)]) -> Self {
-        let mut group_ids = Vec::with_capacity(entries.len() / GROUP + 1);
-        let mut group_offsets = Vec::with_capacity(entries.len() / GROUP + 1);
-        let mut deltas = Vec::with_capacity(entries.len() * 2);
-        let mut locs = Vec::with_capacity(entries.len());
+        let groups = entries.len().div_ceil(GROUP);
+        let mut group_ids = Vec::with_capacity(groups);
+        let mut group_locs = Vec::with_capacity(groups);
+        let mut group_offsets = Vec::with_capacity(groups);
+        let mut deltas = Vec::with_capacity(entries.len() * 5);
         for group in entries.chunks(GROUP) {
             group_ids.push(group[0].0);
+            group_locs.push(group[0].1);
             group_offsets.push(deltas.len() as u32);
-            let mut prev = group[0].0;
-            for (k, &(id, loc)) in group.iter().enumerate() {
-                if k > 0 {
-                    put_varint(&mut deltas, (id - prev) as u64);
-                    prev = id;
-                }
-                locs.push(loc);
+            let (mut prev, mut lat, mut lon) = (group[0].0, group[0].1 .0 as i64, group[0].1 .1 as i64);
+            for &(id, (la, lo)) in &group[1..] {
+                put_varint(&mut deltas, (id - prev) as u64);
+                put_varint(&mut deltas, zz(la as i64 - lat));
+                put_varint(&mut deltas, zz(lo as i64 - lon));
+                (prev, lat, lon) = (id, la as i64, lo as i64);
             }
         }
         deltas.shrink_to_fit();
         Self {
             first_id: entries[0].0,
             last_id: entries[entries.len() - 1].0,
+            len: entries.len(),
             group_ids,
+            group_locs,
             group_offsets,
             deltas,
-            locs,
         }
     }
 
     fn get(&self, id: i64) -> Option<Location> {
         let g = match self.group_ids.binary_search(&id) {
-            Ok(g) => return Some(self.locs[g * GROUP]),
+            Ok(g) => return Some(self.group_locs[g]),
             Err(0) => return None,
             Err(g) => g - 1,
         };
-        let end = self.locs.len().min((g + 1) * GROUP);
+        let n = (self.len - g * GROUP).min(GROUP);
         let mut pos = self.group_offsets[g] as usize;
         let mut cur = self.group_ids[g];
-        for i in g * GROUP + 1..end {
-            let (d, n) = get_varint(&self.deltas[pos..]);
-            pos += n;
+        let (mut lat, mut lon) = (self.group_locs[g].0 as i64, self.group_locs[g].1 as i64);
+        for _ in 1..n {
+            let (d, k) = get_varint(&self.deltas[pos..]);
+            pos += k;
             cur += d as i64;
-            if cur == id {
-                return Some(self.locs[i]);
-            }
             if cur > id {
                 return None;
+            }
+            let (dlat, k) = get_varint(&self.deltas[pos..]);
+            pos += k;
+            let (dlon, k) = get_varint(&self.deltas[pos..]);
+            pos += k;
+            lat += unzz(dlat);
+            lon += unzz(dlon);
+            if cur == id {
+                return Some((lat as i32, lon as i32));
             }
         }
         None
     }
 
     fn entries(&self) -> impl Iterator<Item = (i64, Location)> + '_ {
-        let mut pos = 0usize;
-        let mut cur = 0i64;
-        self.locs.iter().enumerate().map(move |(i, &loc)| {
-            if i % GROUP == 0 {
-                cur = self.group_ids[i / GROUP];
-                pos = self.group_offsets[i / GROUP] as usize;
-            } else {
-                let (d, n) = get_varint(&self.deltas[pos..]);
-                pos += n;
-                cur += d as i64;
-            }
-            (cur, loc)
+        (0..self.group_ids.len()).flat_map(move |g| {
+            let n = (self.len - g * GROUP).min(GROUP);
+            let mut pos = self.group_offsets[g] as usize;
+            let mut cur = self.group_ids[g];
+            let (mut lat, mut lon) = (self.group_locs[g].0 as i64, self.group_locs[g].1 as i64);
+            (0..n).map(move |i| {
+                if i > 0 {
+                    let (d, k) = get_varint(&self.deltas[pos..]);
+                    let (dlat, k2) = get_varint(&self.deltas[pos + k..]);
+                    let (dlon, k3) = get_varint(&self.deltas[pos + k + k2..]);
+                    pos += k + k2 + k3;
+                    cur += d as i64;
+                    lat += unzz(dlat);
+                    lon += unzz(dlon);
+                }
+                (cur, (lat as i32, lon as i32))
+            })
         })
     }
 
     fn bytes(&self) -> usize {
-        self.group_ids.len() * 12 + self.deltas.len() + self.locs.len() * 8
+        self.group_ids.len() * 20 + self.deltas.len()
     }
 }
 
@@ -370,7 +396,7 @@ impl NodeStore {
     /// Number of nodes held (for a dense file: locations written).
     pub fn len(&self) -> usize {
         match &self.kind {
-            StoreKind::Memory { chunks, .. } => chunks.iter().map(|c| c.locs.len()).sum(),
+            StoreKind::Memory { chunks, .. } => chunks.iter().map(|c| c.len).sum(),
             StoreKind::Dense(d) => d.written.load(Ordering::Relaxed),
         }
     }
@@ -423,7 +449,7 @@ mod tests {
         assert_eq!(store.get(2), None);
         assert_eq!(store.get(150_001), None);
         assert_eq!(store.len(), 50_000);
-        assert!(store.heap_bytes() < 50_000 * 11, "{}", store.heap_bytes());
+        assert!(store.heap_bytes() < 50_000 * 7, "{}", store.heap_bytes());
     }
 
     #[test]
