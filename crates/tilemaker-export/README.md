@@ -28,3 +28,14 @@ export_features(&file, &opts, |event| {
 Features match `osmium export`: on the world's administrative boundaries
 the same relations assemble with identical rings, points and areas. See
 the [engine docs](src/engine.rs) for the passes.
+
+Also in this crate:
+
+- `FeatureOptions::{transform, enrich, member_of, within}`: clip,
+  simplify, round; area, length, centroid, label point, bbox, parent
+  relations and containing areas per feature;
+- `write_geojson_seq`: GeoJSON lines serialised on the worker threads;
+- `extract`: PBF extracts identical to `osmium tags-filter` / `osmium
+  extract` (complete_ways), with box, GeoJSON or `.poly` regions;
+- `PolygonIndex`: point-in-polygon lookups (reverse geocoding);
+- `file_info`: what a file holds, like `osmium fileinfo -e`.

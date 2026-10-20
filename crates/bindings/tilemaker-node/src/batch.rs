@@ -6,9 +6,20 @@
 
 use std::collections::HashMap;
 
-use napi::bindgen_prelude::{Float64Array, Int32Array, Uint32Array, Uint8Array};
-use napi::{Env, JsObject, Result};
+use napi::{Env, JsObject, JsTypedArray, Result, TypedArrayType};
 use tilemaker_export::{Element, ElementType, Extras, Feature, GeometryType, Meta};
+
+/// A typed array in V8's own memory (a copy), so its garbage collector
+/// counts it: external buffers made from Rust vectors are invisible to
+/// it, and batches it has not collected yet would pile up natively.
+fn typed<T: Copy>(env: &Env, v: &[T], kind: TypedArrayType) -> Result<JsTypedArray> {
+    let bytes = std::mem::size_of_val(v);
+    let mut buf = env.create_arraybuffer(bytes)?;
+    // SAFETY: plain numbers, `bytes` long.
+    let src = unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, bytes) };
+    buf.as_mut().copy_from_slice(src);
+    buf.into_raw().into_typedarray(kind, v.len(), 0)
+}
 
 /// Per-batch string table.
 #[derive(Default)]
@@ -26,6 +37,11 @@ impl Strings {
         self.list.push(s.to_string());
         self.index.insert(s.to_string(), i);
         i
+    }
+
+    /// Merge `other`'s strings in; the new id of each of its ids.
+    fn merge(&mut self, other: Strings) -> Vec<u32> {
+        other.list.iter().map(|s| self.id(s)).collect()
     }
 
     fn to_js(&self, env: &Env) -> Result<JsObject> {
@@ -52,6 +68,17 @@ fn geom_code(g: GeometryType) -> u8 {
         GeometryType::MultiLineString => 2,
         GeometryType::MultiPolygon => 3,
     }
+}
+
+/// Append `src` (offsets with a leading 0, or empty) to `dst`, shifted.
+fn extend_offsets(dst: &mut Vec<u32>, src: &[u32], base: u32) {
+    if src.is_empty() {
+        return;
+    }
+    if dst.is_empty() {
+        dst.push(0);
+    }
+    dst.extend(src[1..].iter().map(|&o| o + base));
 }
 
 /// Metadata columns.
@@ -90,15 +117,34 @@ impl MetaCols {
         }
     }
 
+    /// `n` absent entries.
+    fn absent(n: usize) -> Self {
+        let mut c = MetaCols::default();
+        for _ in 0..n {
+            c.push(None, &mut Strings::default());
+        }
+        c
+    }
+
+    fn append(&mut self, other: MetaCols, strings: &[u32]) {
+        self.present.extend(other.present);
+        self.version.extend(other.version);
+        self.timestamp.extend(other.timestamp);
+        self.changeset.extend(other.changeset);
+        self.uid.extend(other.uid);
+        self.user.extend(other.user.into_iter().map(|u| strings[u as usize]));
+        self.visible.extend(other.visible);
+    }
+
     fn into_js(self, env: &Env) -> Result<JsObject> {
         let mut o = env.create_object()?;
-        o.set("present", Uint8Array::new(self.present))?;
-        o.set("version", Int32Array::new(self.version))?;
-        o.set("timestamp", Float64Array::new(self.timestamp))?;
-        o.set("changeset", Float64Array::new(self.changeset))?;
-        o.set("uid", Int32Array::new(self.uid))?;
-        o.set("user", Uint32Array::new(self.user))?;
-        o.set("visible", Uint8Array::new(self.visible))?;
+        o.set("present", typed(env, &self.present, TypedArrayType::Uint8)?)?;
+        o.set("version", typed(env, &self.version, TypedArrayType::Int32)?)?;
+        o.set("timestamp", typed(env, &self.timestamp, TypedArrayType::Float64)?)?;
+        o.set("changeset", typed(env, &self.changeset, TypedArrayType::Float64)?)?;
+        o.set("uid", typed(env, &self.uid, TypedArrayType::Int32)?)?;
+        o.set("user", typed(env, &self.user, TypedArrayType::Uint32)?)?;
+        o.set("visible", typed(env, &self.visible, TypedArrayType::Uint8)?)?;
         Ok(o)
     }
 }
@@ -111,6 +157,12 @@ struct TagCols {
 }
 
 impl TagCols {
+    fn append(&mut self, other: TagCols, strings: &[u32]) {
+        let base = self.pairs.len() as u32;
+        self.pairs.extend(other.pairs.iter().map(|&s| strings[s as usize]));
+        extend_offsets(&mut self.offsets, &other.offsets, base);
+    }
+
     fn push(&mut self, tags: &[(String, String)], strings: &mut Strings) {
         if self.offsets.is_empty() {
             self.offsets.push(0);
@@ -226,30 +278,117 @@ impl ExtraCols {
             ("bbox", self.bbox),
         ] {
             if let Some(v) = col {
-                o.set(name, Float64Array::new(v))?;
+                o.set(name, typed(env, &v, TypedArrayType::Float64)?)?;
             }
         }
         if let Some(m) = self.members {
             let mut j = env.create_object()?;
-            j.set("offsets", Uint32Array::new(m.offsets))?;
-            j.set("relations", Uint32Array::new(m.relations))?;
-            j.set("roles", Uint32Array::new(m.roles))?;
-            j.set("ids", Float64Array::new(m.ids))?;
-            j.set("tagOffsets", Uint32Array::new(m.tags.offsets))?;
-            j.set("tags", Uint32Array::new(m.tags.pairs))?;
+            j.set("offsets", typed(env, &m.offsets, TypedArrayType::Uint32)?)?;
+            j.set("relations", typed(env, &m.relations, TypedArrayType::Uint32)?)?;
+            j.set("roles", typed(env, &m.roles, TypedArrayType::Uint32)?)?;
+            j.set("ids", typed(env, &m.ids, TypedArrayType::Float64)?)?;
+            j.set("tagOffsets", typed(env, &m.tags.offsets, TypedArrayType::Uint32)?)?;
+            j.set("tags", typed(env, &m.tags.pairs, TypedArrayType::Uint32)?)?;
             o.set("memberOf", j)?;
         }
         if let Some(w) = self.within {
             let mut j = env.create_object()?;
-            j.set("offsets", Uint32Array::new(w.offsets))?;
-            j.set("areas", Uint32Array::new(w.areas))?;
-            j.set("types", Uint8Array::new(w.types))?;
-            j.set("ids", Float64Array::new(w.ids))?;
-            j.set("tagOffsets", Uint32Array::new(w.tags.offsets))?;
-            j.set("tags", Uint32Array::new(w.tags.pairs))?;
+            j.set("offsets", typed(env, &w.offsets, TypedArrayType::Uint32)?)?;
+            j.set("areas", typed(env, &w.areas, TypedArrayType::Uint32)?)?;
+            j.set("types", typed(env, &w.types, TypedArrayType::Uint8)?)?;
+            j.set("ids", typed(env, &w.ids, TypedArrayType::Float64)?)?;
+            j.set("tagOffsets", typed(env, &w.tags.offsets, TypedArrayType::Uint32)?)?;
+            j.set("tags", typed(env, &w.tags.pairs, TypedArrayType::Uint32)?)?;
             o.set("within", j)?;
         }
         Ok(())
+    }
+}
+
+/// Append metadata columns of a batch of `other_len` records to those of
+/// one of `len` records (either may have none).
+fn append_meta(dst: &mut Option<MetaCols>, len: usize, src: Option<MetaCols>, other_len: usize, strings: &[u32]) {
+    match (dst.as_mut(), src) {
+        (Some(d), None) => d.append(MetaCols::absent(other_len), strings),
+        (Some(d), Some(o)) => d.append(o, strings),
+        (None, Some(o)) => {
+            let mut d = MetaCols::absent(len);
+            d.append(o, strings);
+            *dst = Some(d);
+        }
+        (None, None) => {}
+    }
+}
+
+impl MemberCols {
+    fn append(&mut self, o: MemberCols, strings: &[u32]) {
+        let rels: Vec<u32> = (0..o.ids.len())
+            .map(|r| {
+                let id = o.ids[r] as i64;
+                *self.index.entry(id).or_insert_with(|| {
+                    let i = self.ids.len() as u32;
+                    self.ids.push(o.ids[r]);
+                    let (a, b) = (o.tags.offsets[r] as usize, o.tags.offsets[r + 1] as usize);
+                    let base = self.tags.pairs.len() as u32;
+                    self.tags
+                        .pairs
+                        .extend(o.tags.pairs[a..b].iter().map(|&s| strings[s as usize]));
+                    extend_offsets(&mut self.tags.offsets, &[0, (b - a) as u32], base);
+                    i
+                })
+            })
+            .collect();
+        let base = self.relations.len() as u32;
+        self.relations.extend(o.relations.iter().map(|&r| rels[r as usize]));
+        self.roles.extend(o.roles.iter().map(|&s| strings[s as usize]));
+        extend_offsets(&mut self.offsets, &o.offsets, base);
+    }
+}
+
+impl AreaCols {
+    fn append(&mut self, o: AreaCols, strings: &[u32]) {
+        let areas: Vec<u32> = (0..o.ids.len())
+            .map(|a| {
+                let key = (o.types[a], o.ids[a] as i64);
+                *self.index.entry(key).or_insert_with(|| {
+                    let i = self.ids.len() as u32;
+                    self.types.push(o.types[a]);
+                    self.ids.push(o.ids[a]);
+                    let (s0, s1) = (o.tags.offsets[a] as usize, o.tags.offsets[a + 1] as usize);
+                    let base = self.tags.pairs.len() as u32;
+                    self.tags
+                        .pairs
+                        .extend(o.tags.pairs[s0..s1].iter().map(|&s| strings[s as usize]));
+                    extend_offsets(&mut self.tags.offsets, &[0, (s1 - s0) as u32], base);
+                    i
+                })
+            })
+            .collect();
+        let base = self.areas.len() as u32;
+        self.areas.extend(o.areas.iter().map(|&a| areas[a as usize]));
+        extend_offsets(&mut self.offsets, &o.offsets, base);
+    }
+}
+
+impl ExtraCols {
+    fn append(&mut self, o: ExtraCols, strings: &[u32]) {
+        for (d, s) in [
+            (&mut self.area, o.area),
+            (&mut self.length, o.length),
+            (&mut self.centroid, o.centroid),
+            (&mut self.label_point, o.label_point),
+            (&mut self.bbox, o.bbox),
+        ] {
+            if let Some(s) = s {
+                d.get_or_insert_with(Vec::new).extend(s);
+            }
+        }
+        if let Some(m) = o.members {
+            self.members.get_or_insert_with(Default::default).append(m, strings);
+        }
+        if let Some(w) = o.within {
+            self.within.get_or_insert_with(Default::default).append(w, strings);
+        }
     }
 }
 
@@ -310,21 +449,49 @@ impl FeatureBatch {
         }
     }
 
+    /// Move `other`'s features to the end of this batch.
+    pub(crate) fn append(&mut self, o: FeatureBatch) {
+        if self.len() == 0 {
+            *self = o;
+            return;
+        }
+        let (len, olen) = (self.len(), o.len());
+        let strings = self.strings.merge(o.strings);
+        self.kinds.extend(o.kinds);
+        self.ids.extend(o.ids);
+        self.tags.append(o.tags, &strings);
+        self.geom.extend(o.geom);
+        let base = self.coords.len() as u32;
+        self.coords.extend(o.coords);
+        extend_offsets(&mut self.coord_offsets, &o.coord_offsets, base);
+        let base = self.parts.len() as u32;
+        self.parts.extend(o.parts);
+        extend_offsets(&mut self.part_offsets, &o.part_offsets, base);
+        let base = self.polygons.len() as u32;
+        self.polygons.extend(o.polygons);
+        extend_offsets(&mut self.polygon_offsets, &o.polygon_offsets, base);
+        append_meta(&mut self.meta, len, o.meta, olen, &strings);
+        self.extras.append(o.extras, &strings);
+    }
+
     pub(crate) fn into_js(self, env: &Env) -> Result<JsObject> {
         let mut o = env.create_object()?;
         o.set("kind", "features")?;
         o.set("strings", self.strings.to_js(env)?)?;
-        o.set("types", Uint8Array::new(self.kinds))?;
-        o.set("ids", Float64Array::new(self.ids))?;
-        o.set("tagOffsets", Uint32Array::new(self.tags.offsets))?;
-        o.set("tags", Uint32Array::new(self.tags.pairs))?;
-        o.set("geometryTypes", Uint8Array::new(self.geom))?;
-        o.set("coordOffsets", Uint32Array::new(self.coord_offsets))?;
-        o.set("coords", Float64Array::new(self.coords))?;
-        o.set("partOffsets", Uint32Array::new(self.part_offsets))?;
-        o.set("parts", Uint32Array::new(self.parts))?;
-        o.set("polygonOffsets", Uint32Array::new(self.polygon_offsets))?;
-        o.set("polygons", Uint32Array::new(self.polygons))?;
+        o.set("types", typed(env, &self.kinds, TypedArrayType::Uint8)?)?;
+        o.set("ids", typed(env, &self.ids, TypedArrayType::Float64)?)?;
+        o.set("tagOffsets", typed(env, &self.tags.offsets, TypedArrayType::Uint32)?)?;
+        o.set("tags", typed(env, &self.tags.pairs, TypedArrayType::Uint32)?)?;
+        o.set("geometryTypes", typed(env, &self.geom, TypedArrayType::Uint8)?)?;
+        o.set("coordOffsets", typed(env, &self.coord_offsets, TypedArrayType::Uint32)?)?;
+        o.set("coords", typed(env, &self.coords, TypedArrayType::Float64)?)?;
+        o.set("partOffsets", typed(env, &self.part_offsets, TypedArrayType::Uint32)?)?;
+        o.set("parts", typed(env, &self.parts, TypedArrayType::Uint32)?)?;
+        o.set(
+            "polygonOffsets",
+            typed(env, &self.polygon_offsets, TypedArrayType::Uint32)?,
+        )?;
+        o.set("polygons", typed(env, &self.polygons, TypedArrayType::Uint32)?)?;
         self.extras.into_js(env, &mut o)?;
         if let Some(m) = self.meta {
             o.set("meta", m.into_js(env)?)?;
@@ -403,24 +570,58 @@ impl ElementBatch {
         }
     }
 
+    /// Move `other`'s elements to the end of this batch.
+    pub(crate) fn append(&mut self, o: ElementBatch) {
+        if self.len() == 0 {
+            *self = o;
+            return;
+        }
+        let (len, olen) = (self.len(), o.len());
+        let strings = self.strings.merge(o.strings);
+        self.kinds.extend(o.kinds);
+        self.ids.extend(o.ids);
+        self.tags.append(o.tags, &strings);
+        self.locations.extend(o.locations);
+        let base = self.refs.len() as u32;
+        self.refs.extend(o.refs);
+        extend_offsets(&mut self.ref_offsets, &o.ref_offsets, base);
+        self.has_way_coords.extend(o.has_way_coords);
+        let base = self.way_coords.len() as u32;
+        self.way_coords.extend(o.way_coords);
+        extend_offsets(&mut self.way_coord_offsets, &o.way_coord_offsets, base);
+        let base = self.member_ids.len() as u32;
+        self.member_types.extend(o.member_types);
+        self.member_ids.extend(o.member_ids);
+        self.member_roles
+            .extend(o.member_roles.iter().map(|&r| strings[r as usize]));
+        extend_offsets(&mut self.member_offsets, &o.member_offsets, base);
+        append_meta(&mut self.meta, len, o.meta, olen, &strings);
+    }
+
     pub(crate) fn into_js(self, env: &Env) -> Result<JsObject> {
         let mut o = env.create_object()?;
         o.set("kind", "elements")?;
         o.set("strings", self.strings.to_js(env)?)?;
-        o.set("types", Uint8Array::new(self.kinds))?;
-        o.set("ids", Float64Array::new(self.ids))?;
-        o.set("tagOffsets", Uint32Array::new(self.tags.offsets))?;
-        o.set("tags", Uint32Array::new(self.tags.pairs))?;
-        o.set("locations", Float64Array::new(self.locations))?;
-        o.set("refOffsets", Uint32Array::new(self.ref_offsets))?;
-        o.set("refs", Float64Array::new(self.refs))?;
-        o.set("hasWayCoords", Uint8Array::new(self.has_way_coords))?;
-        o.set("wayCoordOffsets", Uint32Array::new(self.way_coord_offsets))?;
-        o.set("wayCoords", Float64Array::new(self.way_coords))?;
-        o.set("memberOffsets", Uint32Array::new(self.member_offsets))?;
-        o.set("memberTypes", Uint8Array::new(self.member_types))?;
-        o.set("memberIds", Float64Array::new(self.member_ids))?;
-        o.set("memberRoles", Uint32Array::new(self.member_roles))?;
+        o.set("types", typed(env, &self.kinds, TypedArrayType::Uint8)?)?;
+        o.set("ids", typed(env, &self.ids, TypedArrayType::Float64)?)?;
+        o.set("tagOffsets", typed(env, &self.tags.offsets, TypedArrayType::Uint32)?)?;
+        o.set("tags", typed(env, &self.tags.pairs, TypedArrayType::Uint32)?)?;
+        o.set("locations", typed(env, &self.locations, TypedArrayType::Float64)?)?;
+        o.set("refOffsets", typed(env, &self.ref_offsets, TypedArrayType::Uint32)?)?;
+        o.set("refs", typed(env, &self.refs, TypedArrayType::Float64)?)?;
+        o.set("hasWayCoords", typed(env, &self.has_way_coords, TypedArrayType::Uint8)?)?;
+        o.set(
+            "wayCoordOffsets",
+            typed(env, &self.way_coord_offsets, TypedArrayType::Uint32)?,
+        )?;
+        o.set("wayCoords", typed(env, &self.way_coords, TypedArrayType::Float64)?)?;
+        o.set(
+            "memberOffsets",
+            typed(env, &self.member_offsets, TypedArrayType::Uint32)?,
+        )?;
+        o.set("memberTypes", typed(env, &self.member_types, TypedArrayType::Uint8)?)?;
+        o.set("memberIds", typed(env, &self.member_ids, TypedArrayType::Float64)?)?;
+        o.set("memberRoles", typed(env, &self.member_roles, TypedArrayType::Uint32)?)?;
         if let Some(m) = self.meta {
             o.set("meta", m.into_js(env)?)?;
         }

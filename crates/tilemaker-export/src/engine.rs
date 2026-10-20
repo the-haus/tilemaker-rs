@@ -1178,8 +1178,24 @@ impl Runner<'_> {
 pub fn export_elements_from_reader<R: std::io::Read + Send + 'static>(
     reader: R,
     opts: &ElementOptions,
-    mut sink: impl FnMut(Event<Element>) -> Flow,
+    sink: impl FnMut(Event<Element>) -> Flow,
 ) -> Result<ExportStats, ExportError> {
+    export_elements_from_reader_with(reader, opts, |e| e, sink)
+}
+
+/// [`export_elements_from_reader`] with each block's elements turned into
+/// something else by `map` on the worker threads.
+pub fn export_elements_from_reader_with<R, U, M>(
+    reader: R,
+    opts: &ElementOptions,
+    map: M,
+    mut sink: impl FnMut(Event<U>) -> Flow,
+) -> Result<ExportStats, ExportError>
+where
+    R: std::io::Read + Send + 'static,
+    U: Weight + Send + 'static,
+    M: Fn(Vec<Element>) -> Vec<U> + Send + Sync + 'static,
+{
     use tilemaker_pbf::{decompress_blob, BlobKind, BlobReader, Header};
 
     let started = Instant::now();
@@ -1246,13 +1262,13 @@ pub fn export_elements_from_reader<R: std::io::Read + Send + 'static>(
         els.extend(b.nodes().filter_map(|x| s.node(&x, &bf)));
         els.extend(b.ways().filter_map(|x| s.way(&x, &bf, None)));
         els.extend(b.relations().filter_map(|x| s.relation(&x, &bf)));
-        Ok::<_, tilemaker_pbf::Error>(els)
+        Ok::<_, tilemaker_pbf::Error>(if els.is_empty() { Vec::new() } else { map(els) })
     });
     let mut stats = ExportStats::default();
     for (done, r) in results.enumerate() {
         let batch = r?;
         if !batch.is_empty() {
-            stats.emitted += batch.len() as u64;
+            stats.emitted += batch.iter().map(Weight::weight).sum::<u64>();
             if sink(Event::Batch(batch)) == Flow::Stop {
                 stats.stopped = true;
                 break;
@@ -1277,8 +1293,25 @@ pub fn export_elements_from_reader<R: std::io::Read + Send + 'static>(
 pub fn export_elements(
     file: &PbfFile,
     opts: &ElementOptions,
-    mut sink: impl FnMut(Event<Element>) -> Flow,
+    sink: impl FnMut(Event<Element>) -> Flow,
 ) -> Result<ExportStats, ExportError> {
+    export_elements_with(file, opts, |e| e, sink)
+}
+
+/// [`export_elements`] with each block's elements turned into something
+/// else by `map` on the worker threads, in file order.
+pub fn export_elements_with<U, M>(
+    file: &PbfFile,
+    opts: &ElementOptions,
+    map: M,
+    mut sink: impl FnMut(Event<U>) -> Flow,
+) -> Result<ExportStats, ExportError>
+where
+    U: Weight + Send + 'static,
+    M: Fn(Vec<Element>) -> Vec<U> + Send + Sync + 'static,
+{
+    let map = Arc::new(map);
+    let apply = move |m: &Arc<M>, v: Vec<Element>| if v.is_empty() { Vec::new() } else { m(v) };
     let started = Instant::now();
     let c = &opts.common;
     let nthreads = threads(c.threads);
@@ -1342,6 +1375,7 @@ pub fn export_elements(
             runner.blocks_holding(Phase::Nodes, &shared.needed_nodes.read().unwrap())?
         };
         let s = shared.clone();
+        let m = map.clone();
         runner.pass_blocks(
             Phase::Nodes,
             blocks,
@@ -1363,7 +1397,7 @@ pub fn export_elements(
                 if !batch.is_empty() {
                     s.builder.read().unwrap().as_ref().unwrap().insert(&mut batch)?;
                 }
-                Ok(out)
+                Ok(apply(&m, out))
             },
         )?;
         *shared.needed_nodes.write().unwrap() = IdSet::new();
@@ -1374,17 +1408,22 @@ pub fn export_elements(
             *shared.store.write().unwrap() = Some(store);
         }
         let s = shared.clone();
+        let m = map.clone();
         runner.pass(Phase::Ways, decode(false, true, false), &mut sink, move |_, b| {
             let store = s.store.read().unwrap();
             let bf = s.filters.for_block(b);
-            Ok(b.ways().filter_map(|w| s.way(&w, &bf, store.as_ref())).collect())
+            Ok(apply(
+                &m,
+                b.ways().filter_map(|w| s.way(&w, &bf, store.as_ref())).collect(),
+            ))
         })?;
         drop(shared.store.write().unwrap().take());
         if opts.relations && c.filters.may_select(ElementType::Relation) {
             let s = shared.clone();
+            let m = map.clone();
             runner.pass(Phase::Relations, decode(false, false, true), &mut sink, move |_, b| {
                 let bf = s.filters.for_block(b);
-                Ok(b.relations().filter_map(|r| s.relation(&r, &bf)).collect())
+                Ok(apply(&m, b.relations().filter_map(|r| s.relation(&r, &bf)).collect()))
             })?;
         }
     } else {
@@ -1421,13 +1460,14 @@ pub fn export_elements(
             relations: end.max(start)..end.max(start),
         };
         runner.layout = span;
+        let m = map.clone();
         runner.pass(Phase::Elements, decode(dn, dw, dr), &mut sink, move |_, b| {
             let mut out: Vec<Element> = Vec::new();
             let bf = s.filters.for_block(b);
             out.extend(b.nodes().filter_map(|x| s.node(&x, &bf)));
             out.extend(b.ways().filter_map(|x| s.way(&x, &bf, None)));
             out.extend(b.relations().filter_map(|x| s.relation(&x, &bf)));
-            Ok(out)
+            Ok(apply(&m, out))
         })?;
     }
     stats.emitted = runner.emitted;

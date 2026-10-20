@@ -42,6 +42,23 @@ describe("examples", () => {
     expect(out).toEqual(["osm,kind,name,lon,lat", "node/20,amenity=cafe,Café,0.5000000,0.5000000", "node/21,shop=bakery,,10.0000000,10.0000000"]);
   });
 
+  it("places-in-regions", () => {
+    const r = run("places-in-regions.mjs", [fixture("town.osm.pbf")]);
+    expect(JSON.parse(r.stdout)).toEqual([]);
+    expect(r.stderr).toMatch(/0 areas, 0 places/);
+  });
+
+  it("extract", () => {
+    const out = join(work, "x.osm.pbf");
+    const r = run("extract.mjs", [fixture("town.osm.pbf"), out, "--bbox", "-0.1,-0.1,0.45,0.45", "w/building"]);
+    expect(JSON.parse(r.stdout)).toEqual({ bbox: [0, 0, 1, 1], counts: { nodes: 4, ways: 1, relations: 0 } });
+  });
+
+  it("parks-csv", () => {
+    const out = run("parks-csv.mjs", [fixture("town.osm.pbf")]).stdout.trim().split("\n");
+    expect(out).toEqual(["osm,name,area_m2,lon,lat"]);
+  });
+
   it("tiles", () => {
     writeFileSync(
       join(work, "config.json"),

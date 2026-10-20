@@ -18,14 +18,14 @@ mod tiles;
 use napi::bindgen_prelude::AsyncTask;
 use napi::{Env, JsFunction, Result, Task};
 use napi_derive::napi;
-use tilemaker_export::{export_elements, export_features, PbfFile};
+use tilemaker_export::{export_elements_with, export_features_with, PbfFile};
 
 use batch::{ElementBatch, FeatureBatch};
 use options::invalid;
 pub use options::StreamOptions;
 pub use polygon_index::NativePolygonIndex;
 pub use stream::NativeStream;
-use stream::StreamEvent;
+use stream::{Batch, StreamEvent};
 pub use tiles::TileStreamOptions;
 
 /// The file header.
@@ -131,14 +131,18 @@ impl NativeReader {
     #[napi(ts_args_type = "options: StreamOptions, callback: (event: unknown) => void")]
     pub fn features(&self, options: StreamOptions, callback: JsFunction) -> Result<NativeStream> {
         let opts = options::features(&options)?;
+        let (batch_size, read_ahead) = options::batching(&options)?;
         let cb = stream::callback(&callback)?;
         let file = self.file.clone();
         Ok(stream::spawn::<FeatureBatch, _>(
             cb,
-            options.batch_size.unwrap_or(4096) as usize,
-            options.read_ahead.unwrap_or(2),
+            batch_size,
+            read_ahead,
             |b| StreamEvent::Features(Box::new(b)),
-            move |sink| export_features(&file, &opts, sink).map_err(|e| e.to_string()),
+            move |sink| {
+                let map = move |fs| FeatureBatch::build(fs, batch_size);
+                export_features_with(&file, &opts, map, sink).map_err(|e| e.to_string())
+            },
         ))
     }
 
@@ -238,14 +242,18 @@ impl NativeReader {
     #[napi(ts_args_type = "options: StreamOptions, callback: (event: unknown) => void")]
     pub fn elements(&self, options: StreamOptions, callback: JsFunction) -> Result<NativeStream> {
         let opts = options::elements(&options)?;
+        let (batch_size, read_ahead) = options::batching(&options)?;
         let cb = stream::callback(&callback)?;
         let file = self.file.clone();
         Ok(stream::spawn::<ElementBatch, _>(
             cb,
-            options.batch_size.unwrap_or(4096) as usize,
-            options.read_ahead.unwrap_or(2),
+            batch_size,
+            read_ahead,
             |b| StreamEvent::Elements(Box::new(b)),
-            move |sink| export_elements(&file, &opts, sink).map_err(|e| e.to_string()),
+            move |sink| {
+                let map = move |es| ElementBatch::build(es, batch_size);
+                export_elements_with(&file, &opts, map, sink).map_err(|e| e.to_string())
+            },
         ))
     }
 }
@@ -280,14 +288,18 @@ impl NativeReader {
 #[napi(ts_args_type = "options: StreamOptions, callback: (event: unknown) => void")]
 pub fn elements_from_input(options: StreamOptions, callback: JsFunction) -> Result<NativeStream> {
     let opts = options::elements(&options)?;
+    let (batch_size, read_ahead) = options::batching(&options)?;
     let cb = stream::callback(&callback)?;
     let (sender, reader) = input::channel(cb.clone());
     let handle = stream::spawn::<ElementBatch, _>(
         cb,
-        options.batch_size.unwrap_or(4096) as usize,
-        options.read_ahead.unwrap_or(2),
+        batch_size,
+        read_ahead,
         |b| StreamEvent::Elements(Box::new(b)),
-        move |sink| tilemaker_export::export_elements_from_reader(reader, &opts, sink).map_err(|e| e.to_string()),
+        move |sink| {
+            let map = move |es| ElementBatch::build(es, batch_size);
+            tilemaker_export::export_elements_from_reader_with(reader, &opts, map, sink).map_err(|e| e.to_string())
+        },
     );
     *handle.input.lock().unwrap() = Some(sender);
     Ok(handle)

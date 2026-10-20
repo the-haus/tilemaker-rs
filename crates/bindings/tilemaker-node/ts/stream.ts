@@ -48,7 +48,9 @@ export class OsmStream<T, S = ExportStats, P = Progress> implements AsyncIterabl
   #onProgress: ((p: P) => void) | undefined;
   #signal: AbortSignal | undefined;
   #native: NativeStream | undefined;
-  #queue: T[][] = [];
+  /** Native batches not taken yet, decoded only when taken (decoding on
+   * arrival would let queued objects outlive young-generation GCs). */
+  #queue: unknown[] = [];
   #waiter: Waiter<T> | undefined;
   #ended = false;
   #closed = false;
@@ -109,21 +111,15 @@ export class OsmStream<T, S = ExportStats, P = Progress> implements AsyncIterabl
     switch (event.type) {
       case "batch": {
         if (this.#closed || this.#error) return;
-        let records: T[];
-        try {
-          records = this.#decode(event.batch as never);
-        } catch (e) {
-          this.#fail(e instanceof Error ? e : new OsmStreamError(String(e)));
-          return;
-        }
-        if (this.#closed) return;
         if (this.#waiter) {
+          const records = this.#take(event.batch);
+          if (!records) return;
           const w = this.#waiter;
           this.#waiter = undefined;
           this.#native?.request(1);
           w.resolve(records);
         } else {
-          this.#queue.push(records);
+          this.#queue.push(event.batch);
         }
         this.#updateRef();
         return;
@@ -238,12 +234,24 @@ export class OsmStream<T, S = ExportStats, P = Progress> implements AsyncIterabl
     this.#updateRef();
   }
 
+  /** Decode a native batch; on failure, fail the stream. */
+  #take(batch: unknown): T[] | undefined {
+    try {
+      return this.#decode(batch as never);
+    } catch (e) {
+      this.#fail(e instanceof Error ? e : new OsmStreamError(String(e)));
+      return undefined;
+    }
+  }
+
   async #next(): Promise<T[] | null> {
     await this.#ensureStarted();
     const queued = this.#queue.shift();
-    if (queued) {
+    if (queued !== undefined) {
       this.#native?.request(1);
-      return queued;
+      const records = this.#take(queued);
+      if (!records) throw this.#error;
+      return records;
     }
     if (this.#error) throw this.#error;
     if (this.#ended || this.#closed) return null;

@@ -92,6 +92,19 @@ pub(crate) fn invalid(msg: impl Into<String>) -> Error {
     Error::new(Status::InvalidArg, msg.into())
 }
 
+/// Records per batch and batches ahead (both at least 1).
+pub(crate) fn batching(o: &StreamOptions) -> Result<(usize, u32)> {
+    let batch_size = o.batch_size.unwrap_or(4096);
+    let read_ahead = o.read_ahead.unwrap_or(2);
+    if batch_size == 0 {
+        return Err(invalid("batchSize must be a positive integer"));
+    }
+    if read_ahead == 0 {
+        return Err(invalid("readAhead must be a positive integer"));
+    }
+    Ok((batch_size as usize, read_ahead))
+}
+
 pub(crate) fn common(o: &StreamOptions) -> Result<CommonOptions> {
     let mut filters = FilterSet::parse(o.filters.as_deref().unwrap_or(&[])).map_err(|e| invalid(e.to_string()))?;
     filters.include_untagged = o.include_untagged.unwrap_or(false);

@@ -9,6 +9,25 @@ import { openPbf, streamFeatures, toGeoJSON, writeTiles, type Feature } from "..
 import { fixture } from "./helpers.js";
 
 describe("robustness", () => {
+  it("rejects batch sizes and read-aheads that are not positive", async () => {
+    const pbf = await openPbf(fixture("town.osm.pbf"));
+    await expect(pbf.features({ batchSize: 0 }).toArray()).rejects.toThrow(/batchSize/);
+    await expect(pbf.elements({ batchSize: Number.NaN }).toArray()).rejects.toThrow(/batchSize/);
+    await expect(pbf.elements({ readAhead: 0 }).toArray()).rejects.toThrow(/readAhead/);
+  });
+
+  it("merges small batches into batchSize ones, in order", async () => {
+    const pbf = await openPbf(fixture("grid.osm.pbf"));
+    const sizes: number[] = [];
+    const ids: number[] = [];
+    for await (const b of pbf.elements({ types: ["node"], batchSize: 1000 }).batches()) {
+      sizes.push(b.length);
+      ids.push(...b.map((e) => e.id));
+    }
+    expect(sizes.slice(0, -1).every((n) => n === 1000)).toBe(true);
+    expect(ids).toEqual([...ids].sort((a, b) => a - b));
+  });
+
   it("fails the stream, not the process, when onProgress throws", async () => {
     const pbf = await openPbf(fixture("grid.osm.pbf"));
     const stream = pbf.features({

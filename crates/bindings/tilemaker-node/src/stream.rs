@@ -208,6 +208,24 @@ pub(crate) trait Batch: Default {
     fn push(&mut self, item: Self::Item);
     fn len(&self) -> usize;
     fn coords_len(&self) -> usize;
+    fn append(&mut self, other: Self);
+
+    /// Pack records into batches of at most `batch_size` (and about
+    /// [`MAX_BATCH_COORDS`] coordinates): done on the worker threads.
+    fn build(items: Vec<Self::Item>, batch_size: usize) -> Vec<Self> {
+        let mut out = Vec::new();
+        let mut b = Self::default();
+        for item in items {
+            b.push(item);
+            if b.len() >= batch_size || b.coords_len() >= MAX_BATCH_COORDS {
+                out.push(std::mem::take(&mut b));
+            }
+        }
+        if b.len() > 0 {
+            out.push(b);
+        }
+        out
+    }
 }
 
 impl Batch for FeatureBatch {
@@ -221,6 +239,9 @@ impl Batch for FeatureBatch {
     fn coords_len(&self) -> usize {
         FeatureBatch::coords_len(self)
     }
+    fn append(&mut self, other: Self) {
+        FeatureBatch::append(self, other)
+    }
 }
 
 impl Batch for ElementBatch {
@@ -233,6 +254,21 @@ impl Batch for ElementBatch {
     }
     fn coords_len(&self) -> usize {
         ElementBatch::coords_len(self)
+    }
+    fn append(&mut self, other: Self) {
+        ElementBatch::append(self, other)
+    }
+}
+
+impl tilemaker_export::Weight for FeatureBatch {
+    fn weight(&self) -> u64 {
+        self.len() as u64
+    }
+}
+
+impl tilemaker_export::Weight for ElementBatch {
+    fn weight(&self) -> u64 {
+        self.len() as u64
     }
 }
 
@@ -253,14 +289,21 @@ impl<B: Batch> Sender<B> {
         Flow::Continue
     }
 
-    pub(crate) fn on_event(&mut self, e: Event<B::Item>) -> Flow {
+    /// Batches built on the workers are merged while small, so filtered
+    /// streams do not cross into JS a few records at a time.
+    pub(crate) fn on_event(&mut self, e: Event<B>) -> Flow {
         if self.credits.is_closed() {
             return Flow::Stop;
         }
         match e {
-            Event::Batch(items) => {
-                for item in items {
-                    self.batch.push(item);
+            Event::Batch(batches) => {
+                for b in batches {
+                    let full = self.batch.len() + b.len() > self.batch_size
+                        || self.batch.coords_len() + b.coords_len() > MAX_BATCH_COORDS;
+                    if full && self.flush() == Flow::Stop {
+                        return Flow::Stop;
+                    }
+                    self.batch.append(b);
                     if (self.batch.len() >= self.batch_size || self.batch.coords_len() >= MAX_BATCH_COORDS)
                         && self.flush() == Flow::Stop
                     {
@@ -298,7 +341,7 @@ pub(crate) fn spawn<B, F>(
 ) -> NativeStream
 where
     B: Batch + Send + 'static,
-    F: FnOnce(&mut dyn FnMut(Event<B::Item>) -> Flow) -> std::result::Result<ExportStats, String> + Send + 'static,
+    F: FnOnce(&mut dyn FnMut(Event<B>) -> Flow) -> std::result::Result<ExportStats, String> + Send + 'static,
 {
     let credits = Arc::new(Credits::default());
     credits.grant(read_ahead.max(1));

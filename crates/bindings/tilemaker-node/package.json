@@ -71,7 +71,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "bench": "node bench/run.mjs",
     "artifacts": "napi artifacts",
     "create-npm-dirs": "napi create-npm-dir -t .",
     "copy-license": "node -e \"const fs=require('fs');fs.copyFileSync('../../../LICENCE.txt','LICENSE');fs.copyFileSync('../../../CHANGELOG.md','CHANGELOG.md')\"",
