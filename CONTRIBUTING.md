@@ -37,8 +37,6 @@ the tests, and in parallel:
   and the packed tarballs are installed and used on every platform before
   anything is published; prereleases such as `X.Y.Z-rc.1` go to the `next`
   dist-tag, versions already on npm are skipped);
-- publishes the crates to crates.io in dependency order (`cargo publish
-  --workspace`);
 - builds `tilemaker` for Linux (x64, arm64), macOS (arm64, x64) and Windows
   (x64);
 
@@ -46,8 +44,10 @@ and finally creates the GitHub release with the notes, the binary archives
 and `SHA256SUMS`. Run the workflow by hand (`dry-run` on) to build and
 check everything without publishing.
 
-Repository settings it needs: the secrets `NPM_TOKEN` (or npm trusted
-publishing for this workflow) and `CARGO_REGISTRY_TOKEN`; environments
-`npm-publish` and `crates-publish` (add required reviewers to gate them).
-npm provenance needs `repository.url` in the package to point at this
-repository.
+The crates are not published to crates.io yet; `cargo package` in CI keeps
+them publishable.
+
+Repository settings it needs: the environment `npm-publish` (add required
+reviewers to gate it) with the secret `NPM_TOKEN` (or npm trusted
+publishing for this workflow). npm provenance also needs the repository to
+be public, and `repository.url` in the package to point at it.

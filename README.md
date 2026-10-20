@@ -72,7 +72,7 @@ configs (OpenMapTiles, a small example, coastline and debug). To build the
 CLI with Cargo instead:
 
 ```sh
-cargo install tilemaker-cli
+cargo install --git https://github.com/the-haus/tilemaker-rs --tag v0.1.0 tilemaker-cli
 ```
 
 ### Node.js
@@ -88,11 +88,16 @@ details.
 
 ### Rust
 
+The crates are not on crates.io yet; depend on them from Git:
+
 ```toml
 [dependencies]
-tilemaker-export = "0.1"   # filters, features, GeoJSON, extracts, polygon index
-tilemaker-pbf = "0.1"      # just the PBF reader and writer
-tilemaker-core = "0.1"     # the tile pipeline
+# filters, features, GeoJSON, extracts, polygon index
+tilemaker-export = { git = "https://github.com/the-haus/tilemaker-rs", tag = "v0.1.0" }
+# just the PBF reader and writer
+tilemaker-pbf = { git = "https://github.com/the-haus/tilemaker-rs", tag = "v0.1.0" }
+# the tile pipeline
+tilemaker-core = { git = "https://github.com/the-haus/tilemaker-rs", tag = "v0.1.0" }
 ```
 
 ## Quick start
@@ -263,7 +268,6 @@ Development setup, conventions and the release process are described in
 A single workflow then publishes all of the following:
 
 - the npm packages;
-- the crates on crates.io;
 - the CLI binaries;
 - a GitHub release with notes and checksums.
 

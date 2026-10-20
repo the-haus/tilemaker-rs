@@ -16,5 +16,8 @@ runs:
       with:
         node-version: ${{ inputs.node-version }}
         registry-url: ${{ inputs.registry-url }}
+        # setup-node v5 caches for the `packageManager` in package.json on
+        # its own, by running the global Yarn 1, before Corepack is enabled.
+        package-manager-cache: false
     - shell: bash
       run: corepack enable

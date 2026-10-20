@@ -4,12 +4,13 @@
 #    workspace builds and its tests pass, and the CHANGELOG section becomes
 #    the release notes;
 # 2. npm: @tilemaker-rs/node and its eight platform packages (release-node.yml);
-# 3. crates: the Rust crates on crates.io, in dependency order;
-# 4. cli: `tilemaker` binaries for Linux, macOS and Windows;
-# 5. github-release: a GitHub release with the notes, binaries and checksums.
+# 3. cli: `tilemaker` binaries for Linux, macOS and Windows;
+# 4. github-release: a GitHub release with the notes, binaries and checksums.
 #
-# Secrets: NPM_TOKEN (or npm trusted publishing), CARGO_REGISTRY_TOKEN.
-# Environments: npm-publish, crates-publish (add reviewers to gate them).
+# The crates are not published to crates.io yet.
+#
+# Secrets: NPM_TOKEN (or npm trusted publishing).
+# Environments: npm-publish (add reviewers to gate it).
 name: release
 
 on:
@@ -81,30 +82,6 @@ jobs:
       contents: read
       id-token: write
 
-  crates:
-    name: publish crates
-    needs: check
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    environment: crates-publish
-    steps:
-      - uses: actions/checkout@v5
-      - uses: ./.github/actions/setup-rust
-        with:
-          cache-key: release-crates
-      # Publishes the workspace members in dependency order, waiting for
-      # each to appear in the index (needs cargo 1.90+).
-      - name: cargo publish
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        shell: bash
-        run: |
-          if [ "$DRY_RUN" = "true" ]; then
-            cargo publish --workspace --exclude tilemaker-node --locked --dry-run
-          else
-            cargo publish --workspace --exclude tilemaker-node --locked
-          fi
-
   cli:
     name: tilemaker ${{ matrix.target }}
     needs: check
@@ -161,7 +138,7 @@ jobs:
 
   github-release:
     name: GitHub release
-    needs: [check, npm, crates, cli]
+    needs: [check, npm, cli]
     runs-on: ubuntu-latest
     permissions:
       contents: write
