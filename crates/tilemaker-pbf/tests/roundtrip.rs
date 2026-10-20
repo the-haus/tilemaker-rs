@@ -1,6 +1,7 @@
 use std::io::Cursor;
 use std::path::PathBuf;
 
+use tilemaker_pbf::write::ELEMENTS_PER_BLOCK;
 use tilemaker_pbf::*;
 
 fn temp_path(name: &str) -> PathBuf {
@@ -521,4 +522,92 @@ fn first_elements_from_partial_inflation() {
         assert!(nodes.is_empty());
         let _ = std::fs::remove_file(path);
     }
+}
+
+#[test]
+fn parallel_writer_merges_blocks_in_order() {
+    let path = temp_path("parallel.osm.pbf");
+    let info = Info {
+        version: 4,
+        timestamp: 1_700_000_000,
+        changeset: 77,
+        uid: 12,
+        visible: true,
+    };
+    let f = std::fs::File::create(&path).unwrap();
+    let mut w = ParallelWriter::new(
+        std::io::BufWriter::new(f),
+        WriterOptions {
+            sorted: true,
+            ..Default::default()
+        },
+        4,
+    )
+    .unwrap();
+    // Many small builders, as an extract's selections are.
+    let mut id = 0i64;
+    for chunk in 0..900 {
+        let mut b = BlockBuilder::new();
+        for _ in 0..(chunk % 37) {
+            id += 1;
+            let name = format!("n{id}");
+            b.node(
+                id,
+                id as i32,
+                -(id as i32),
+                [("name", name.as_str())],
+                Some((&info, "eve")),
+            );
+        }
+        w.push(b).unwrap();
+    }
+    let nodes = id;
+    let mut b = BlockBuilder::new();
+    b.way(1, &[1, 2, 3], &[], [("highway", "x")], None);
+    w.push(b).unwrap();
+    let mut b = BlockBuilder::new();
+    b.relation(
+        1,
+        [(1, ElementType::Way, "outer")],
+        [("type", "multipolygon")],
+        Some((&info, "eve")),
+    );
+    w.push(b).unwrap();
+    let (_, stats) = w.finish().unwrap();
+    assert_eq!((stats.nodes, stats.ways, stats.relations), (nodes as u64, 1, 1));
+    assert_eq!(stats.bytes, std::fs::metadata(&path).unwrap().len());
+
+    let file = PbfFile::open(&path).unwrap();
+    assert!(file.header().is_sorted());
+    let mut next = 1i64;
+    let mut ways = 0;
+    let mut rels = 0;
+    for r in file.blocks(0..file.blobs().len(), DecodeOptions::WITH_METADATA, 2) {
+        let (_, b) = r.unwrap();
+        assert!(b.node_count() <= ELEMENTS_PER_BLOCK);
+        let kinds = b.kinds();
+        assert!(
+            [kinds.nodes, kinds.ways, kinds.relations]
+                .iter()
+                .filter(|&&k| k)
+                .count()
+                == 1
+        );
+        for n in b.nodes() {
+            assert_eq!(n.id(), next);
+            assert_eq!(n.tags().get("name"), Some(format!("n{next}").as_str()));
+            assert_eq!(n.info().unwrap().changeset, 77);
+            assert_eq!(n.info().unwrap().user(), "eve");
+            next += 1;
+        }
+        ways += b.way_count();
+        for r in b.relations() {
+            rels += 1;
+            assert_eq!(r.info().unwrap().timestamp, 1_700_000_000);
+        }
+    }
+    assert_eq!((next - 1, ways, rels), (nodes, 1, 1));
+    // Merged: far fewer blocks than builders.
+    assert!(file.blobs().len() < 10, "{}", file.blobs().len());
+    let _ = std::fs::remove_file(path);
 }

@@ -27,7 +27,7 @@ pub use block::{
 };
 pub use file::{Layout, PbfFile};
 pub use header::{Header, HeaderBbox};
-pub use write::{PbfWriter, WriterOptions};
+pub use write::{BlockBuilder, ParallelWriter, PbfWriter, WriteStats, WriterOptions};
 
 /// Errors reading a PBF file.
 #[derive(Debug, thiserror::Error)]
