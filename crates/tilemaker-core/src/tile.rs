@@ -10,10 +10,10 @@ use tilemaker_geom::packed;
 use tilemaker_geom::simplify::{simplify_linestring, simplify_multipolygon};
 use tilemaker_geom::valid::{orient_multipolygon, repair_multipolygon, union_many};
 use tilemaker_geom::{ll_to_coord, Coord, LineString, MultiLineString, MultiPolygon, Rect, TileBbox};
-use tilemaker_lua::{AttributeValue, GeometryKind};
+use tilemaker_lua::GeometryKind;
 use tilemaker_mvt::{GeomType, LayerBuilder, TileBuilder, Value};
 
-use crate::data::{OutputObject, TileData};
+use crate::data::{AttributeRef, OutputObject, TileData};
 
 pub(crate) struct Renderer {
     pub data: std::sync::Arc<TileData>,
@@ -174,7 +174,7 @@ impl Renderer {
             let run = &list[i..j];
             i = j;
             match o.kind {
-                GeometryKind::Point => self.write_points(layer, &o, run, z, bbox),
+                GeometryKind::Point => self.write_points(layer, first, run, z, bbox),
                 GeometryKind::LineString | GeometryKind::MultiLineString => {
                     let mut mls = MultiLineString::new(Vec::new());
                     let mut line = Vec::new();
@@ -195,7 +195,7 @@ impl Renderer {
                     if run.len() > 1 {
                         mls = reorder_multilinestring(mls);
                     }
-                    self.write_lines(layer, &o, ld, mls, simplify, z, bbox);
+                    self.write_lines(layer, first, ld, mls, simplify, z, bbox);
                 }
                 GeometryKind::Polygon => {
                     let mut parts = Vec::with_capacity(run.len());
@@ -215,14 +215,14 @@ impl Renderer {
                         remove_parts_below(&mut mp, filter_area);
                     }
                     if !mp.0.is_empty() {
-                        self.write_polygon(layer, &o, ld, &mp, simplify, z, bbox);
+                        self.write_polygon(layer, first, ld, &mp, simplify, z, bbox);
                     }
                 }
             }
         }
     }
 
-    fn write_points(&self, layer: &mut LayerBuilder, o: &OutputObject, run: &[u32], z: u8, bbox: &TileBbox) {
+    fn write_points(&self, layer: &mut LayerBuilder, first: u32, run: &[u32], z: u8, bbox: &TileBbox) {
         let extent = bbox.extent() as i32;
         let margin = 256;
         let mut pts = Vec::with_capacity(run.len());
@@ -237,7 +237,7 @@ impl Renderer {
             return;
         }
         let mut f = layer.feature(GeomType::Point);
-        self.feature_header(&mut f, o, z);
+        self.feature_header(&mut f, first, z);
         f.add_points(&pts);
         f.commit();
     }
@@ -246,7 +246,7 @@ impl Renderer {
     fn write_lines(
         &self,
         layer: &mut LayerBuilder,
-        o: &OutputObject,
+        first: u32,
         ld: &LayerDef,
         mls: MultiLineString,
         simplify: f64,
@@ -275,7 +275,7 @@ impl Renderer {
             }
         }
         if any {
-            self.feature_header(&mut f, o, z);
+            self.feature_header(&mut f, first, z);
             f.commit();
         }
     }
@@ -284,7 +284,7 @@ impl Renderer {
     fn write_polygon(
         &self,
         layer: &mut LayerBuilder,
-        o: &OutputObject,
+        first: u32,
         ld: &LayerDef,
         mp: &MultiPolygon,
         simplify: f64,
@@ -332,26 +332,29 @@ impl Renderer {
             }
         }
         if any {
-            self.feature_header(&mut f, o, z);
+            self.feature_header(&mut f, first, z);
             f.commit();
         }
     }
 
-    fn feature_header(&self, f: &mut tilemaker_mvt::FeatureBuilder<'_>, o: &OutputObject, z: u8) {
-        if self.config.include_ids && o.id > 0 {
-            f.set_id(o.id as u64);
+    fn feature_header(&self, f: &mut tilemaker_mvt::FeatureBuilder<'_>, object: u32, z: u8) {
+        if let Some(&id) = self.data.ids.get(object as usize) {
+            if id > 0 {
+                f.set_id(id as u64);
+            }
         }
-        for a in self.data.attribute_sets[o.attributes as usize].iter() {
-            if a.min_zoom > z {
+        let o = &self.data.objects[object as usize];
+        for (key, value, min_zoom) in self.data.attributes.get(o.attributes) {
+            if min_zoom > z {
                 continue;
             }
-            let v = match &a.value {
-                AttributeValue::String(s) => Value::String(s.clone()),
-                AttributeValue::Float(n) => Value::Float(*n as f32),
-                AttributeValue::Int(i) => Value::Int(*i),
-                AttributeValue::Bool(b) => Value::Bool(*b),
+            let v = match value {
+                AttributeRef::String(s) => Value::String(s.to_string()),
+                AttributeRef::Float(n) => Value::Float(n as f32),
+                AttributeRef::Int(i) => Value::Int(i),
+                AttributeRef::Bool(b) => Value::Bool(b),
             };
-            f.add_property(&a.key, v);
+            f.add_property(key, v);
         }
     }
 }

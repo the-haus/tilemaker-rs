@@ -25,6 +25,7 @@ tilemaker-mvt.workspace = true
 tilemaker-output.workspace = true
 geo.workspace = true
 rayon.workspace = true
+rustc-hash.workspace = true
 crossbeam-channel.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -1092,6 +1092,7 @@ dependencies = [
  "crossbeam-channel",
  "geo",
  "rayon",
+ "rustc-hash",
  "serde",
  "serde_json",
  "thiserror",

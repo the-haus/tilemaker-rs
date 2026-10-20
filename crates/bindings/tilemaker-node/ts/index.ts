@@ -108,6 +108,7 @@ function emptyTileStats(stopped: boolean): TileStats {
       storedNodes: 0,
       storedWays: 0,
       geometryBytes: 0,
+      attributeSets: 0,
     },
     tiles: 0,
     tilesPerZoom: [],

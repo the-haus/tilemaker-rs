@@ -40,6 +40,8 @@ pub struct ReadStats {
     pub stored_ways: u64,
     /// Bytes the output geometries take.
     pub geometry_bytes: u64,
+    /// Distinct attribute sets.
+    pub attribute_sets: u64,
 }
 
 fn latp_lon((lat, lon): Location) -> LatpLon {
@@ -209,7 +211,7 @@ pub(crate) fn read(
         None => SignificantTags::all(),
     };
     let base_zoom = config.basezoom;
-    let mut data = TileData::new(base_zoom);
+    let mut data = TileData::new(base_zoom, config.include_ids);
     let mut stats = ReadStats::default();
     let counters = Counters::default();
     let only = |kind: ElementType| DecodeOptions {
@@ -225,10 +227,13 @@ pub(crate) fn read(
     let used_relations_b = IdSetBuilder::new();
     let node_filtering = way_keys.enabled();
     let used_nodes_b = IdSetBuilder::new();
+    // Nodes with a role in a relation: the relations pass looks them up,
+    // from a store of their own so that the big one can go first.
+    let member_nodes_b = IdSetBuilder::new();
     let mut scanned = ScannedRelations::new();
     {
         let wk = &way_keys;
-        let (uw, ur, un) = (&used_ways_b, &used_relations_b, &used_nodes_b);
+        let (uw, ur, un, mn) = (&used_ways_b, &used_relations_b, &used_nodes_b, &member_nodes_b);
         let profiles = profiles.clone();
         let caps = &caps;
         r.phase(
@@ -239,6 +244,11 @@ pub(crate) fn read(
                 let mut local = ScannedRelations::new();
                 let mut accepted = 0u64;
                 for rel in b.relations() {
+                    for m in rel.members() {
+                        if m.kind == ElementType::Node && !m.role.is_empty() {
+                            mn.insert(m.id);
+                        }
+                    }
                     let tags = rel.tags();
                     let mp = tags.get("type") == Some("multipolygon");
                     let mut is_accepted = false;
@@ -317,11 +327,14 @@ pub(crate) fn read(
         )?;
     }
     let used_nodes: Option<IdSet> = node_filtering.then(|| used_nodes_b.freeze());
+    let member_nodes = member_nodes_b.freeze();
 
     // 3. Nodes.
     let nodes_builder: NodeStoreBuilder = NodeStore::memory();
+    let member_nodes_builder: NodeStoreBuilder = NodeStore::memory();
     {
         let (nk, un, nb, sc) = (&node_keys, &used_nodes, &nodes_builder, &scanned);
+        let (mn, mb) = (&member_nodes, &member_nodes_builder);
         let profiles = profiles.clone();
         let caps = &caps;
         let counters = &counters;
@@ -332,8 +345,12 @@ pub(crate) fn read(
             move |b| {
                 let mut out = Vec::new();
                 let mut batch: Vec<(i64, Location)> = Vec::new();
+                let mut members: Vec<(i64, Location)> = Vec::new();
                 for n in b.nodes() {
                     let loc = (n.lat_e7(), n.lon_e7());
+                    if mn.contains(n.id()) {
+                        members.push((n.id(), loc));
+                    }
                     let tags = n.tags();
                     let mut emitted = false;
                     if caps.nodes && !tags.is_empty() && nk.filter(&tags) {
@@ -362,6 +379,7 @@ pub(crate) fn read(
                     }
                 }
                 nb.insert(&mut batch)?;
+                mb.insert(&mut members)?;
                 Ok(out)
             },
             |objs: Vec<IndexedObject>| {
@@ -372,7 +390,9 @@ pub(crate) fn read(
         )?;
     }
     drop(used_nodes);
+    drop(member_nodes);
     let node_store = nodes_builder.freeze();
+    let member_node_store = member_nodes_builder.freeze();
     stats.stored_nodes = node_store.len() as u64;
 
     // 4. Ways.
@@ -450,10 +470,12 @@ pub(crate) fn read(
     }
     let way_store = ways_builder.freeze();
     stats.stored_ways = way_store.len() as u64;
+    // Relations need only the member ways and nodes stored for them.
+    drop(node_store);
 
     // 5. Relations.
     {
-        let (wk, ur, ws, ns, sc) = (&way_keys, &used_relations, &way_store, &node_store, &scanned);
+        let (wk, ur, ws, ns, sc) = (&way_keys, &used_relations, &way_store, &member_node_store, &scanned);
         let profiles = profiles.clone();
         let caps = &caps;
         let counters = &counters;
@@ -539,7 +561,7 @@ pub(crate) fn read(
         )?;
     }
     drop(way_store);
-    drop(node_store);
+    drop(member_node_store);
     // exit_function on every state.
     let exit_err = Mutex::new(None);
     profiles.for_each(r.pool, |p| {
@@ -560,6 +582,7 @@ pub(crate) fn read(
     stats.ways_missing_nodes = counters.missing.load(Ordering::Relaxed);
     stats.objects = data.objects.len() as u64;
     stats.geometry_bytes = data.geometries.bytes() as u64;
+    stats.attribute_sets = data.attributes.len() as u64;
     Ok((data, stats))
 }
 

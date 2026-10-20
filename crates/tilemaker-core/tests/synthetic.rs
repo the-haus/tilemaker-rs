@@ -502,3 +502,58 @@ fn combines_and_filters_polygons() {
     }
     assert_eq!(by_zoom[&14], 3, "{by_zoom:?}");
 }
+
+#[test]
+fn relation_label_nodes() {
+    // A lake relation whose `label` node sits at (0.015, 0.015), away from
+    // the lake's centre: LayerAsCentroid with that role places it there.
+    let path = temp("label.osm.pbf");
+    let mut w = PbfWriter::with_options(
+        Vec::new(),
+        WriterOptions {
+            sorted: true,
+            ..Default::default()
+        },
+    );
+    for (id, lon, lat) in [
+        (1, 0.001, 0.001),
+        (2, 0.019, 0.001),
+        (3, 0.019, 0.019),
+        (4, 0.001, 0.019),
+    ] {
+        w.node(id, e7(lat), e7(lon), &[]).unwrap();
+    }
+    w.node(30, e7(0.015), e7(0.015), &[]).unwrap();
+    w.way(102, &[1, 2, 3, 4, 1], &[]).unwrap();
+    w.relation(
+        200,
+        &[(102, ElementType::Way, "outer"), (30, ElementType::Node, "label")],
+        &[("type", "multipolygon"), ("natural", "water")],
+    )
+    .unwrap();
+    std::fs::write(&path, w.finish().unwrap()).unwrap();
+    let profile = r#"
+function way_function()
+  if Find("natural") == "water" then
+    LayerAsCentroid("poi", "polylabel", "label")
+    Attribute("name", "Lake")
+  end
+end
+"#;
+    let file = PbfFile::open(&path).unwrap();
+    let config = Config::from_json(CONFIG).unwrap();
+    let mut last = None;
+    generate(&file, &config, profile, "label.lua", &TileOptions::default(), |e| {
+        if let Event::Tile(t) = e {
+            last = Some(t);
+        }
+        Flow::Continue
+    })
+    .unwrap();
+    let t14 = decode(&last.unwrap().data).unwrap();
+    let poi = t14.layers.iter().find(|l| l.name == "poi").unwrap();
+    let (x, y) = poi.features[0].decode_geometry()[0][0];
+    // 0.015° in z14 tile 8192/8191: 0.015/360·2^14·4096 ≈ 2796.
+    assert!((x - 2796).abs() <= 1, "{x}");
+    assert!((y - (4096 - 2796)).abs() <= 2, "{y}");
+}
