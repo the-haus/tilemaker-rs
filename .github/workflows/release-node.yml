@@ -184,6 +184,8 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: "18"
+          # Not the root package.json's Yarn 4 (setup-node would run Yarn 1).
+          package-manager-cache: false
       - name: install and use
         shell: bash
         env:
@@ -215,6 +217,8 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
+          # Not the root package.json's Yarn 4 (setup-node would run Yarn 1).
+          package-manager-cache: false
       # Trusted publishing (OIDC) needs npm 11.5.1 or later.
       - run: npm install -g npm@11
       # Platform packages first, so the root package never points at missing
