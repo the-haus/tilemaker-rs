@@ -39,7 +39,9 @@ import {
   type TileProgress,
   type TileStats,
   type TileStreamOptions,
+  type WriteGeoJSONSeqOptions,
   type WriteTilesOptions,
+  type ExportStats,
 } from "./types.js";
 
 export * from "./types.js";
@@ -55,7 +57,9 @@ export {
   type Position,
 } from "./geojson.js";
 
-function nativeOptions(o: CommonOptions & FeatureOptions & ElementOptions): NativeStreamOptions {
+function nativeOptions(
+  o: CommonOptions & FeatureOptions & ElementOptions & Partial<Pick<WriteGeoJSONSeqOptions, "recordSeparator">>,
+): NativeStreamOptions {
   const out: NativeStreamOptions = {};
   if (o.filters !== undefined) out.filters = [...o.filters];
   if (o.tags !== undefined) out.tags = Array.isArray(o.tags) ? [...o.tags] : o.tags;
@@ -71,6 +75,20 @@ function nativeOptions(o: CommonOptions & FeatureOptions & ElementOptions): Nati
   if (o.types !== undefined) out.types = [...o.types];
   if (o.wayLocations !== undefined) out.wayLocations = o.wayLocations;
   if (o.includeUntagged !== undefined) out.includeUntagged = o.includeUntagged;
+  if (o.clip !== undefined) out.clip = [...o.clip];
+  if (o.simplify !== undefined) out.simplify = o.simplify;
+  if (o.precision !== undefined) out.precision = o.precision;
+  if (o.enrich !== undefined) {
+    const e = o.enrich;
+    out.enrich = {};
+    if (e.area !== undefined) out.enrich.area = e.area;
+    if (e.length !== undefined) out.enrich.length = e.length;
+    if (e.centroid !== undefined) out.enrich.centroid = e.centroid;
+    if (e.labelPoint !== undefined) out.enrich.labelPoint = e.labelPoint;
+    if (e.bbox !== undefined) out.enrich.bbox = e.bbox;
+    if (e.memberOf !== undefined) out.enrich.memberOf = Array.isArray(e.memberOf) ? [...e.memberOf] : e.memberOf;
+  }
+  if (o.recordSeparator !== undefined) out.recordSeparator = o.recordSeparator;
   return out;
 }
 
@@ -197,6 +215,14 @@ export class PbfReader {
   /** Make vector tiles into an `.mbtiles`, `.pmtiles` or a directory. */
   writeTiles(options: WriteTilesOptions): Promise<TileStats> {
     return writeTilesWith(async () => this.#native, options);
+  }
+
+  /**
+   * Write features as newline-delimited GeoJSON (see {@link writeGeoJSONSeq}).
+   * Resolves with the export's counters.
+   */
+  writeGeoJSONSeq(options: WriteGeoJSONSeqOptions): Promise<ExportStats> {
+    return writeGeoJSONSeqWith(async () => this.#native, options);
   }
 
   /** Stream raw elements: nodes, ways (node ids, optionally coordinates) and relations (members). */
@@ -352,6 +378,44 @@ async function writeTilesWith(reader: () => Promise<NativeReader>, options: Writ
     void _;
   }
   return stream.stats;
+}
+
+async function writeGeoJSONSeqWith(
+  reader: () => Promise<NativeReader>,
+  options: WriteGeoJSONSeqOptions,
+): Promise<ExportStats> {
+  const opts = nativeOptions(options);
+  opts.output = toPath(options.output);
+  const stream = new OsmStream<never>(
+    async (cb) => (await reader()).writeGeoJSONSeq(opts, cb),
+    () => [],
+    options.onProgress,
+    options.signal,
+  );
+  for await (const _ of stream) {
+    void _;
+  }
+  return stream.stats;
+}
+
+/**
+ * Export features from `input` straight into a newline-delimited GeoJSON
+ * file (`options.output`): filtering, assembly, serialisation and writing
+ * all happen on native threads, so no feature crosses into JavaScript —
+ * the fastest way to make a `.geojsonseq`. Each line is the
+ * {@link toGeoJSON} of a feature. Takes every feature option (filters,
+ * `clip`, `simplify`, `precision`, `enrich`, …).
+ *
+ * ```ts
+ * const stats = await writeGeoJSONSeq("planet.osm.pbf", {
+ *   filters: ["r/admin_level=2"],
+ *   enrich: { area: true, labelPoint: true },
+ *   output: "countries.geojsonseq",
+ * });
+ * ```
+ */
+export function writeGeoJSONSeq(input: string | URL, options: WriteGeoJSONSeqOptions): Promise<ExportStats> {
+  return writeGeoJSONSeqWith(() => openNative(input), options);
 }
 
 /** {@link PbfReader.tiles} on a path. */

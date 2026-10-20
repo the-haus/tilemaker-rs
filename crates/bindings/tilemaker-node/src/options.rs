@@ -4,8 +4,27 @@ use napi::bindgen_prelude::Either;
 use napi::{Error, Result, Status};
 use napi_derive::napi;
 use tilemaker_export::{
-    ClosedWays, CommonOptions, ElementOptions, FeatureOptions, FilterSet, GeometryTypes, NodeStorage, TagSelection,
+    ClosedWays, CommonOptions, ElementOptions, Enrich, FeatureOptions, FilterSet, GeometryTypes, NodeStorage,
+    TagSelection, Transform,
 };
+
+/// Values computed for each feature.
+#[napi(object)]
+#[derive(Default)]
+pub struct EnrichOptions {
+    /// Area in m².
+    pub area: Option<bool>,
+    /// Length in m (polygons: perimeter).
+    pub length: Option<bool>,
+    /// Centroid.
+    pub centroid: Option<bool>,
+    /// Label point.
+    pub label_point: Option<bool>,
+    /// Bounding box.
+    pub bbox: Option<bool>,
+    /// Parent relations: `true` for all, or filters selecting them.
+    pub member_of: Option<Either<bool, Vec<String>>>,
+}
 
 /// Options for `features()` and `elements()`. See the TypeScript docs.
 #[napi(object)]
@@ -41,6 +60,30 @@ pub struct StreamOptions {
     pub way_locations: Option<bool>,
     /// Elements: with no filters, also emit untagged elements.
     pub include_untagged: Option<bool>,
+    /// Features: clip geometries to `[west, south, east, north]`.
+    pub clip: Option<Vec<f64>>,
+    /// Features: Douglas–Peucker tolerance in degrees.
+    pub simplify: Option<f64>,
+    /// Features: round coordinates to this many decimals.
+    pub precision: Option<u32>,
+    /// Features: computed values.
+    pub enrich: Option<EnrichOptions>,
+    /// `writeGeoJSONSeq`: the output path.
+    pub output: Option<String>,
+    /// `writeGeoJSONSeq`: start each line with a record separator (RFC 8142).
+    pub record_separator: Option<bool>,
+}
+
+fn bbox_option(name: &str, b: &Option<Vec<f64>>) -> Result<Option<[f64; 4]>> {
+    match b {
+        None => Ok(None),
+        Some(b) if b.len() == 4 && b.iter().all(|v| v.is_finite()) && b[0] <= b[2] && b[1] <= b[3] => {
+            Ok(Some([b[0], b[1], b[2], b[3]]))
+        }
+        Some(_) => Err(invalid(format!(
+            "{name} must be [west, south, east, north] with west <= east and south <= north"
+        ))),
+    }
 }
 
 pub(crate) fn invalid(msg: impl Into<String>) -> Error {
@@ -55,17 +98,7 @@ pub(crate) fn common(o: &StreamOptions) -> Result<CommonOptions> {
         Some(Either::A(false)) => TagSelection::None,
         Some(Either::B(keys)) => TagSelection::keys(keys),
     };
-    let bbox = match &o.bbox {
-        None => None,
-        Some(b) if b.len() == 4 && b.iter().all(|v| v.is_finite()) && b[0] <= b[2] && b[1] <= b[3] => {
-            Some([b[0], b[1], b[2], b[3]])
-        }
-        Some(_) => {
-            return Err(invalid(
-                "bbox must be [west, south, east, north] with west <= east and south <= north",
-            ))
-        }
-    };
+    let bbox = bbox_option("bbox", &o.bbox)?;
     Ok(CommonOptions {
         filters,
         tags,
@@ -114,11 +147,37 @@ pub(crate) fn features(o: &StreamOptions) -> Result<FeatureOptions> {
             )))
         }
     };
+    if o.simplify.is_some_and(|t| !t.is_finite() || t < 0.0) {
+        return Err(invalid("simplify must be a tolerance in degrees (>= 0)"));
+    }
+    if o.precision.is_some_and(|p| p > 15) {
+        return Err(invalid("precision must be 0 to 15 decimals"));
+    }
+    let e = o.enrich.as_ref();
+    let flag = |f: fn(&EnrichOptions) -> Option<bool>| e.and_then(f).unwrap_or(false);
+    let member_of = match e.and_then(|e| e.member_of.as_ref()) {
+        None | Some(Either::A(false)) => None,
+        Some(Either::A(true)) => Some(FilterSet::default()),
+        Some(Either::B(f)) => Some(FilterSet::parse(f).map_err(|e| invalid(e.to_string()))?),
+    };
     Ok(FeatureOptions {
         common: common(o)?,
         geometry_types,
         closed_ways,
         relation_lines: o.relation_lines.unwrap_or(false),
+        transform: Transform {
+            clip: bbox_option("clip", &o.clip)?,
+            simplify: o.simplify,
+            precision: o.precision.map(|p| p as u8),
+        },
+        enrich: Enrich {
+            area: flag(|e| e.area),
+            length: flag(|e| e.length),
+            centroid: flag(|e| e.centroid),
+            label_point: flag(|e| e.label_point),
+            bbox: flag(|e| e.bbox),
+        },
+        member_of,
     })
 }
 

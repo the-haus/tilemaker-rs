@@ -16,6 +16,19 @@ export interface NativeStreamOptions {
   types?: string[];
   wayLocations?: boolean;
   includeUntagged?: boolean;
+  clip?: number[];
+  simplify?: number;
+  precision?: number;
+  enrich?: {
+    area?: boolean;
+    length?: boolean;
+    centroid?: boolean;
+    labelPoint?: boolean;
+    bbox?: boolean;
+    memberOf?: boolean | string[];
+  };
+  output?: string;
+  recordSeparator?: boolean;
 }
 
 export interface NativeHeader {
@@ -56,6 +69,19 @@ export interface NativeFeatureBatch {
   polygonOffsets: Uint32Array;
   polygons: Uint32Array;
   meta?: NativeMeta;
+  area?: Float64Array;
+  length?: Float64Array;
+  centroid?: Float64Array;
+  labelPoint?: Float64Array;
+  bbox?: Float64Array;
+  memberOf?: {
+    offsets: Uint32Array;
+    relations: Uint32Array;
+    roles: Uint32Array;
+    ids: Float64Array;
+    tagOffsets: Uint32Array;
+    tags: Uint32Array;
+  };
 }
 
 export interface NativeElementBatch {
@@ -133,6 +159,7 @@ export interface NativeReader {
   elements(options: NativeStreamOptions, callback: (event: NativeEvent) => void): NativeStream;
   tiles(options: NativeTileOptions, callback: (event: NativeEvent) => void): NativeStream;
   writeTiles(options: NativeTileOptions, callback: (event: NativeEvent) => void): NativeStream;
+  writeGeoJSONSeq(options: NativeStreamOptions, callback: (event: NativeEvent) => void): NativeStream;
 }
 
 export function open(path: string): Promise<NativeReader>;

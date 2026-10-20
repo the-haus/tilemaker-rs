@@ -57,6 +57,16 @@ export type Geometry = PointGeometry | LineStringGeometry | MultiLineStringGeome
 
 export type GeometryType = Geometry["type"];
 
+/** A relation an element belongs to (with `enrich.memberOf`). */
+export interface ParentRelation {
+  /** The relation's id. */
+  id: number;
+  /** The element's role in it. */
+  role: string;
+  /** The relation's tags (one object per relation and batch, shared by its members' features). */
+  tags: Tags;
+}
+
 /** An assembled feature. */
 export interface Feature<G extends Geometry = Geometry> {
   /** The element it was made from. */
@@ -65,6 +75,18 @@ export interface Feature<G extends Geometry = Geometry> {
   tags: Tags;
   geometry: G;
   meta?: Meta;
+  /** With `enrich.area`: area in m² (0 for points and lines). */
+  area?: number;
+  /** With `enrich.length`: length in m (polygons: perimeter; points: 0). */
+  length?: number;
+  /** With `enrich.centroid`: `[lon, lat]`, area- or length-weighted. */
+  centroid?: [number, number];
+  /** With `enrich.labelPoint`: `[lon, lat]` inside polygons (pole of inaccessibility), halfway along lines. */
+  labelPoint?: [number, number];
+  /** With `enrich.bbox`: `[west, south, east, north]`. */
+  bbox?: [number, number, number, number];
+  /** With `enrich.memberOf`: the relations the element belongs to. */
+  memberOf?: ParentRelation[];
 }
 
 export interface NodeElement {
@@ -279,6 +301,27 @@ export interface CommonOptions {
   signal?: AbortSignal;
 }
 
+/** Values computed for each feature, from its (transformed) geometry. */
+export interface EnrichOptions {
+  /** `area` in m² (on the sphere). */
+  area?: boolean;
+  /** `length` in m (on the sphere): lines' length, polygons' perimeter. */
+  length?: boolean;
+  /** `centroid`: area-weighted for polygons, length-weighted for lines. */
+  centroid?: boolean;
+  /** `labelPoint`: a point inside polygons (pole of inaccessibility of the largest part), lines' midpoint. */
+  labelPoint?: boolean;
+  /** `bbox`: `[west, south, east, north]`. */
+  bbox?: boolean;
+  /**
+   * `memberOf`: the relations the element belongs to, with its role and
+   * their tags. `true` for every relation, or filters selecting them
+   * (e.g. `["type=route"]`). Costs a pass over the relations and memory for
+   * their memberships, so narrow it on large files.
+   */
+  memberOf?: boolean | string[];
+}
+
 export interface FeatureOptions extends CommonOptions {
   /** Geometry types to produce (default all). */
   geometryTypes?: Array<"point" | "linestring" | "polygon">;
@@ -290,6 +333,26 @@ export interface FeatureOptions extends CommonOptions {
   closedWays?: "auto" | "polygon" | "linestring" | "both";
   /** Also turn non-area relations (routes, waterways, …) into multi-linestrings. */
   relationLines?: boolean;
+  /**
+   * Clip geometries to `[west, south, east, north]`: what lies outside is
+   * cut off (features wholly outside are dropped; a line that leaves and
+   * re-enters becomes a MultiLineString). Unlike `bbox`, which selects.
+   */
+  clip?: [number, number, number, number];
+  /** Simplify geometries (Douglas–Peucker tolerance in degrees); rings that collapse are dropped. */
+  simplify?: number;
+  /** Round coordinates to this many decimals (repeated points are removed). */
+  precision?: number;
+  /** Values to compute for each feature. */
+  enrich?: EnrichOptions;
+}
+
+/** Options for {@link writeGeoJSONSeq}. */
+export interface WriteGeoJSONSeqOptions extends Omit<FeatureOptions, "batchSize" | "readAhead"> {
+  /** The output file (replaced if it exists). */
+  output: string | URL;
+  /** Start each line with an ASCII record separator (RFC 8142), as `osmium export -f geojsonseq` does by default. */
+  recordSeparator?: boolean;
 }
 
 export interface ElementOptions extends CommonOptions {

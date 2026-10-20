@@ -2,7 +2,7 @@
 // subarray views into the batch's typed arrays (no copying).
 
 import type { NativeElementBatch, NativeFeatureBatch, NativeMeta, NativeTileBatch } from "./native.js";
-import type { Element, Feature, Geometry, Member, Meta, OsmType, Tags, Tile } from "./types.js";
+import type { Element, Feature, Geometry, Member, Meta, OsmType, ParentRelation, Tags, Tile } from "./types.js";
 
 const OSM_TYPES: readonly OsmType[] = ["node", "way", "relation"];
 
@@ -36,6 +36,9 @@ function metaAt(strings: string[], m: NativeMeta | undefined, i: number): Meta |
 export function decodeFeatures(b: NativeFeatureBatch): Feature[] {
   const n = b.types.length;
   const out = new Array<Feature>(n);
+  const m = b.memberOf;
+  // Each parent relation's tags, decoded once per batch.
+  const parentTags: Tags[] = m ? Array.from(m.ids, (_, r) => tagsAt(b.strings, m.tagOffsets, m.tags, r)) : [];
   for (let i = 0; i < n; i++) {
     const coordinates = b.coords.subarray(b.coordOffsets[i]!, b.coordOffsets[i + 1]!);
     let geometry: Geometry;
@@ -69,6 +72,21 @@ export function decodeFeatures(b: NativeFeatureBatch): Feature[] {
     };
     const meta = metaAt(b.strings, b.meta, i);
     if (meta) f.meta = meta;
+    if (b.area) f.area = b.area[i]!;
+    if (b.length) f.length = b.length[i]!;
+    if (b.centroid) f.centroid = [b.centroid[2 * i]!, b.centroid[2 * i + 1]!];
+    if (b.labelPoint) f.labelPoint = [b.labelPoint[2 * i]!, b.labelPoint[2 * i + 1]!];
+    if (b.bbox) f.bbox = [b.bbox[4 * i]!, b.bbox[4 * i + 1]!, b.bbox[4 * i + 2]!, b.bbox[4 * i + 3]!];
+    if (m) {
+      const start = m.offsets[i]!;
+      const end = m.offsets[i + 1]!;
+      const parents = new Array<ParentRelation>(end - start);
+      for (let k = start; k < end; k++) {
+        const r = m.relations[k]!;
+        parents[k - start] = { id: m.ids[r]!, role: b.strings[m.roles[k]!]!, tags: parentTags[r]! };
+      }
+      f.memberOf = parents;
+    }
     out[i] = f;
   }
   return out;

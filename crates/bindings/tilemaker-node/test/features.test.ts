@@ -168,7 +168,7 @@ describe("features", () => {
     expect(noTags[0]!.tags).toEqual({});
     const wild = await collect({ filters: ["n/amenity"], tags: ["n*"] });
     expect(wild[0]!.tags).toEqual({ name: "Café" });
-    expect(toGeoJSON(fs[0]!).properties["@timestamp"]).toBe("2020-09-13T12:26:40.000Z");
+    expect(toGeoJSON(fs[0]!).properties["@timestamp"]).toBe("2020-09-13T12:26:40Z");
   });
 
   it("reads LocationsOnWays files without a node store", async () => {

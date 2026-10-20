@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use napi::bindgen_prelude::{Float64Array, Int32Array, Uint32Array, Uint8Array};
 use napi::{Env, JsObject, Result};
-use tilemaker_export::{Element, ElementType, Feature, GeometryType, Meta};
+use tilemaker_export::{Element, ElementType, Extras, Feature, GeometryType, Meta};
 
 /// Per-batch string table.
 #[derive(Default)]
@@ -123,6 +123,91 @@ impl TagCols {
     }
 }
 
+/// Parent relations: per feature a range of (relation, role), relations
+/// listed once per batch with their tags.
+#[derive(Default)]
+struct MemberCols {
+    offsets: Vec<u32>,
+    relations: Vec<u32>,
+    roles: Vec<u32>,
+    index: HashMap<i64, u32>,
+    ids: Vec<f64>,
+    tags: TagCols,
+}
+
+/// Computed values; a column exists when the stream computes it (the same
+/// for every feature).
+#[derive(Default)]
+struct ExtraCols {
+    area: Option<Vec<f64>>,
+    length: Option<Vec<f64>>,
+    centroid: Option<Vec<f64>>,
+    label_point: Option<Vec<f64>>,
+    bbox: Option<Vec<f64>>,
+    members: Option<MemberCols>,
+}
+
+impl ExtraCols {
+    fn push(&mut self, x: &Extras, strings: &mut Strings) {
+        fn col<const N: usize>(c: &mut Option<Vec<f64>>, v: Option<[f64; N]>) {
+            if let Some(v) = v {
+                c.get_or_insert_with(Vec::new).extend_from_slice(&v);
+            }
+        }
+        col(&mut self.area, x.area.map(|v| [v]));
+        col(&mut self.length, x.length.map(|v| [v]));
+        col(&mut self.centroid, x.centroid);
+        col(&mut self.label_point, x.label_point);
+        col(&mut self.bbox, x.bbox);
+        if let Some(parents) = &x.member_of {
+            let m = self.members.get_or_insert_with(|| MemberCols {
+                offsets: vec![0],
+                ..Default::default()
+            });
+            for p in parents {
+                let rel = match m.index.get(&p.id) {
+                    Some(&r) => r,
+                    None => {
+                        let r = m.ids.len() as u32;
+                        m.ids.push(p.id as f64);
+                        m.tags.push(&p.tags, strings);
+                        m.index.insert(p.id, r);
+                        r
+                    }
+                };
+                m.relations.push(rel);
+                m.roles.push(strings.id(&p.role));
+            }
+            m.offsets.push(m.relations.len() as u32);
+        }
+    }
+
+    fn into_js(self, env: &Env, o: &mut JsObject) -> Result<()> {
+        for (name, col) in [
+            ("area", self.area),
+            ("length", self.length),
+            ("centroid", self.centroid),
+            ("labelPoint", self.label_point),
+            ("bbox", self.bbox),
+        ] {
+            if let Some(v) = col {
+                o.set(name, Float64Array::new(v))?;
+            }
+        }
+        if let Some(m) = self.members {
+            let mut j = env.create_object()?;
+            j.set("offsets", Uint32Array::new(m.offsets))?;
+            j.set("relations", Uint32Array::new(m.relations))?;
+            j.set("roles", Uint32Array::new(m.roles))?;
+            j.set("ids", Float64Array::new(m.ids))?;
+            j.set("tagOffsets", Uint32Array::new(m.tags.offsets))?;
+            j.set("tags", Uint32Array::new(m.tags.pairs))?;
+            o.set("memberOf", j)?;
+        }
+        Ok(())
+    }
+}
+
 /// A batch of features.
 #[derive(Default)]
 pub(crate) struct FeatureBatch {
@@ -138,6 +223,7 @@ pub(crate) struct FeatureBatch {
     polygon_offsets: Vec<u32>,
     polygons: Vec<u32>,
     meta: Option<MetaCols>,
+    extras: ExtraCols,
 }
 
 impl FeatureBatch {
@@ -165,6 +251,7 @@ impl FeatureBatch {
         self.part_offsets.push(self.parts.len() as u32);
         self.polygons.extend_from_slice(&f.geometry.polygons);
         self.polygon_offsets.push(self.polygons.len() as u32);
+        self.extras.push(&f.extras, &mut self.strings);
         if f.meta.is_some() || self.meta.is_some() {
             let n = self.kinds.len() - 1;
             let cols = self.meta.get_or_insert_with(|| {
@@ -193,6 +280,7 @@ impl FeatureBatch {
         o.set("parts", Uint32Array::new(self.parts))?;
         o.set("polygonOffsets", Uint32Array::new(self.polygon_offsets))?;
         o.set("polygons", Uint32Array::new(self.polygons))?;
+        self.extras.into_js(env, &mut o)?;
         if let Some(m) = self.meta {
             o.set("meta", m.into_js(env)?)?;
         }

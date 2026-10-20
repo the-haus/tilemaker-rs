@@ -14,6 +14,8 @@ export interface GeoJSONFeature {
   /** `"node/123"`, `"way/456"`, `"relation/789"`. */
   id: string;
   properties: Record<string, unknown>;
+  /** The feature's `bbox`, when computed. */
+  bbox?: [number, number, number, number];
   geometry: GeoJSONGeometry;
 }
 
@@ -65,9 +67,14 @@ export function polygonRings(g: MultiPolygonGeometry): Array<Array<[number, numb
   return out;
 }
 
+/** Seconds since the epoch as ISO 8601, to the second (as osmium writes it). */
+const iso = (seconds: number) => new Date(seconds * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+
 /**
  * A feature as GeoJSON: tags become properties, plus `@type` and `@id`
- * (like `osmium export -a type,id`), and metadata as `@version`, … when present.
+ * (like `osmium export -a type,id`), metadata as `@version`, … and computed
+ * values as `@area`, `@length`, `@centroid`, `@labelPoint`, `@memberOf`
+ * when present (the same as {@link writeGeoJSONSeq} writes).
  */
 export function toGeoJSON(f: Feature): GeoJSONFeature {
   const properties: Record<string, unknown> = {};
@@ -79,12 +86,21 @@ export function toGeoJSON(f: Feature): GeoJSONFeature {
   set("@id", f.id);
   if (f.meta) {
     set("@version", f.meta.version);
-    set("@timestamp", new Date(f.meta.timestamp * 1000).toISOString());
+    set("@timestamp", iso(f.meta.timestamp));
     set("@changeset", f.meta.changeset);
     set("@uid", f.meta.uid);
     set("@user", f.meta.user);
   }
-  return { type: "Feature", id: `${f.type}/${f.id}`, properties, geometry: geometryToGeoJSON(f.geometry) };
+  if (f.area !== undefined) set("@area", f.area);
+  if (f.length !== undefined) set("@length", f.length);
+  if (f.centroid) set("@centroid", f.centroid);
+  if (f.labelPoint) set("@labelPoint", f.labelPoint);
+  if (f.memberOf) set("@memberOf", f.memberOf);
+  const geometry = geometryToGeoJSON(f.geometry);
+  const id = `${f.type}/${f.id}`;
+  return f.bbox
+    ? { type: "Feature", id, properties, bbox: f.bbox, geometry }
+    : { type: "Feature", id, properties, geometry };
 }
 
 /** `[west, south, east, north]` of a geometry. */

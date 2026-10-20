@@ -15,8 +15,8 @@ use crate::credits::Credits;
 
 /// What the producer sends to JS.
 pub(crate) enum StreamEvent {
-    Features(FeatureBatch),
-    Elements(ElementBatch),
+    Features(Box<FeatureBatch>),
+    Elements(Box<ElementBatch>),
     Tiles(crate::tiles::TileBatch),
     Progress(Progress),
     TileProgress(tilemaker_core::Progress),
@@ -314,6 +314,45 @@ where
             cb.call(event, ThreadsafeFunctionCallMode::Blocking);
         })
         .expect("spawn export thread");
+    handle
+}
+
+/// Run `job` (which emits no records) on its own thread, reporting its
+/// progress (throttled) and then its end or error to `cb`. The job's
+/// progress callback says `Stop` once JS closes the stream.
+pub(crate) fn spawn_task<F>(cb: Callback, job: F) -> NativeStream
+where
+    F: FnOnce(&mut dyn FnMut(Progress) -> Flow) -> std::result::Result<serde_json::Value, String> + Send + 'static,
+{
+    let credits = Arc::new(Credits::default());
+    let handle = NativeStream::new(credits.clone(), cb.clone());
+    thread::Builder::new()
+        .name("tilemaker-task".into())
+        .spawn(move || {
+            let mut last: Option<(Instant, tilemaker_export::Phase)> = None;
+            let mut progress = |p: Progress| {
+                if credits.is_closed() {
+                    return Flow::Stop;
+                }
+                let now = Instant::now();
+                let due = match last {
+                    None => true,
+                    Some((t, phase)) => {
+                        phase != p.phase || p.blocks_done == p.blocks_total || now - t >= Duration::from_millis(200)
+                    }
+                };
+                if due {
+                    last = Some((now, p.phase));
+                    cb.call(StreamEvent::Progress(p), ThreadsafeFunctionCallMode::NonBlocking);
+                }
+                Flow::Continue
+            };
+            let event = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&mut progress)))
+                .unwrap_or_else(|p| Err(format!("internal error: {}", panic_message(&p))))
+                .map_or_else(StreamEvent::Error, StreamEvent::End);
+            cb.call(event, ThreadsafeFunctionCallMode::Blocking);
+        })
+        .expect("spawn task thread");
     handle
 }
 

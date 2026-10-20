@@ -105,9 +105,32 @@ impl NativeReader {
             cb,
             options.batch_size.unwrap_or(4096) as usize,
             options.read_ahead.unwrap_or(2),
-            StreamEvent::Features,
+            |b| StreamEvent::Features(Box::new(b)),
             move |sink| export_features(&file, &opts, sink).map_err(|e| e.to_string()),
         ))
+    }
+
+    /// Write features as GeoJSON lines to `options.output`, serialised on
+    /// the worker threads (no feature crosses into JS).
+    #[napi(
+        js_name = "writeGeoJSONSeq",
+        ts_args_type = "options: StreamOptions, callback: (event: unknown) => void"
+    )]
+    pub fn write_geojson_seq(&self, options: StreamOptions, callback: JsFunction) -> Result<NativeStream> {
+        let output = options.output.clone().ok_or_else(|| invalid("output is required"))?;
+        let opts = options::features(&options)?;
+        let geojson = tilemaker_export::GeoJsonOptions {
+            record_separator: options.record_separator.unwrap_or(false),
+        };
+        let cb = stream::callback(&callback)?;
+        let file = self.file.clone();
+        Ok(stream::spawn_task(cb, move |progress| {
+            let f = std::fs::File::create(&output).map_err(|e| format!("{output}: {e}"))?;
+            let mut out = std::io::BufWriter::with_capacity(1 << 20, f);
+            let stats = tilemaker_export::write_geojson_seq(&file, &opts, geojson, &mut out, progress)
+                .map_err(|e| e.to_string())?;
+            serde_json::to_value(&stats).map_err(|e| e.to_string())
+        }))
     }
 
     /// Stream raw elements to `callback(event)`.
@@ -120,7 +143,7 @@ impl NativeReader {
             cb,
             options.batch_size.unwrap_or(4096) as usize,
             options.read_ahead.unwrap_or(2),
-            StreamEvent::Elements,
+            |b| StreamEvent::Elements(Box::new(b)),
             move |sink| export_elements(&file, &opts, sink).map_err(|e| e.to_string()),
         ))
     }
@@ -162,7 +185,7 @@ pub fn elements_from_input(options: StreamOptions, callback: JsFunction) -> Resu
         cb,
         options.batch_size.unwrap_or(4096) as usize,
         options.read_ahead.unwrap_or(2),
-        StreamEvent::Elements,
+        |b| StreamEvent::Elements(Box::new(b)),
         move |sink| tilemaker_export::export_elements_from_reader(reader, &opts, sink).map_err(|e| e.to_string()),
     );
     *handle.input.lock().unwrap() = Some(sender);
