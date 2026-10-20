@@ -6,7 +6,8 @@
   "license": "FTWPL",
   "packageManager": "yarn@4.5.1",
   "workspaces": [
-    "crates/bindings/tilemaker-node"
+    "crates/bindings/tilemaker-node",
+    "bench"
   ],
   "scripts": {
     "build": "yarn workspaces foreach -A -pt run build",

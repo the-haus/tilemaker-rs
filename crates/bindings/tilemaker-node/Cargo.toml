@@ -2,7 +2,7 @@
 name = "tilemaker-node"
 edition.workspace = true
 version.workspace = true
-license.workspace = true
+license-file.workspace = true
 publish = false
 
 [lib]

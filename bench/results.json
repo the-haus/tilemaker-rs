@@ -1,0 +1,488 @@
+{
+  "read||monaco|@tilemaker-rs/node": {
+    "group": "read",
+    "variant": "",
+    "dataset": "monaco",
+    "tool": "@tilemaker-rs/node",
+    "seconds": 0.08,
+    "rssMB": 135,
+    "at": "2026-10-20T05:35:46.838Z"
+  },
+  "read||monaco|osm-pbf-parser": {
+    "group": "read",
+    "variant": "",
+    "dataset": "monaco",
+    "tool": "osm-pbf-parser",
+    "seconds": 0.16,
+    "rssMB": 124,
+    "at": "2026-10-20T04:41:01.413Z"
+  },
+  "read||monaco|osm-read": {
+    "group": "read",
+    "variant": "",
+    "dataset": "monaco",
+    "tool": "osm-read",
+    "seconds": 0.2,
+    "rssMB": 175,
+    "at": "2026-10-20T04:41:02.038Z"
+  },
+  "filter||monaco|@tilemaker-rs/node": {
+    "group": "filter",
+    "variant": "",
+    "dataset": "monaco",
+    "tool": "@tilemaker-rs/node",
+    "seconds": 0.05,
+    "rssMB": 67,
+    "at": "2026-10-20T05:36:10.095Z"
+  },
+  "filter||monaco|osm-pbf-parser": {
+    "group": "filter",
+    "variant": "",
+    "dataset": "monaco",
+    "tool": "osm-pbf-parser",
+    "seconds": 0.16,
+    "rssMB": 125,
+    "at": "2026-10-20T04:41:06.649Z"
+  },
+  "filter||monaco|osm-read": {
+    "group": "filter",
+    "variant": "",
+    "dataset": "monaco",
+    "tool": "osm-read",
+    "seconds": 0.2,
+    "rssMB": 173,
+    "at": "2026-10-20T04:41:07.277Z"
+  },
+  "count||monaco|tilemaker fileinfo": {
+    "group": "count",
+    "variant": "",
+    "dataset": "monaco",
+    "tool": "tilemaker fileinfo",
+    "seconds": 0,
+    "rssMB": 14,
+    "at": "2026-10-20T04:41:10.958Z"
+  },
+  "count||monaco|osmium fileinfo": {
+    "group": "count",
+    "variant": "",
+    "dataset": "monaco",
+    "tool": "osmium fileinfo",
+    "seconds": 0.01,
+    "rssMB": 18,
+    "at": "2026-10-20T04:41:10.997Z"
+  },
+  "tiles||monaco|tilemaker-rs": {
+    "group": "tiles",
+    "variant": "",
+    "dataset": "monaco",
+    "tool": "tilemaker-rs",
+    "seconds": 0.12,
+    "rssMB": 42,
+    "at": "2026-10-20T04:41:11.573Z"
+  },
+  "tiles||monaco|C++ tilemaker": {
+    "group": "tiles",
+    "variant": "",
+    "dataset": "monaco",
+    "tool": "C++ tilemaker",
+    "seconds": 0.67,
+    "rssMB": 1900,
+    "at": "2026-10-20T04:41:13.623Z"
+  },
+  "read||liechtenstein|@tilemaker-rs/node": {
+    "group": "read",
+    "variant": "",
+    "dataset": "liechtenstein",
+    "tool": "@tilemaker-rs/node",
+    "seconds": 0.16,
+    "rssMB": 202,
+    "at": "2026-10-20T05:35:47.360Z"
+  },
+  "read||liechtenstein|osm-pbf-parser": {
+    "group": "read",
+    "variant": "",
+    "dataset": "liechtenstein",
+    "tool": "osm-pbf-parser",
+    "seconds": 0.44,
+    "rssMB": 164,
+    "at": "2026-10-20T04:41:03.883Z"
+  },
+  "read||liechtenstein|osm-read": {
+    "group": "read",
+    "variant": "",
+    "dataset": "liechtenstein",
+    "tool": "osm-read",
+    "seconds": 0.67,
+    "rssMB": 255,
+    "at": "2026-10-20T04:41:05.972Z"
+  },
+  "filter||liechtenstein|@tilemaker-rs/node": {
+    "group": "filter",
+    "variant": "",
+    "dataset": "liechtenstein",
+    "tool": "@tilemaker-rs/node",
+    "seconds": 0.06,
+    "rssMB": 81,
+    "at": "2026-10-20T05:36:10.300Z"
+  },
+  "filter||liechtenstein|osm-pbf-parser": {
+    "group": "filter",
+    "variant": "",
+    "dataset": "liechtenstein",
+    "tool": "osm-pbf-parser",
+    "seconds": 0.44,
+    "rssMB": 163,
+    "at": "2026-10-20T04:41:08.829Z"
+  },
+  "filter||liechtenstein|osm-read": {
+    "group": "filter",
+    "variant": "",
+    "dataset": "liechtenstein",
+    "tool": "osm-read",
+    "seconds": 0.68,
+    "rssMB": 268,
+    "at": "2026-10-20T04:41:10.925Z"
+  },
+  "count||liechtenstein|tilemaker fileinfo": {
+    "group": "count",
+    "variant": "",
+    "dataset": "liechtenstein",
+    "tool": "tilemaker fileinfo",
+    "seconds": 0.01,
+    "rssMB": 30,
+    "at": "2026-10-20T04:41:11.064Z"
+  },
+  "count||liechtenstein|osmium fileinfo": {
+    "group": "count",
+    "variant": "",
+    "dataset": "liechtenstein",
+    "tool": "osmium fileinfo",
+    "seconds": 0.02,
+    "rssMB": 43,
+    "at": "2026-10-20T04:41:11.149Z"
+  },
+  "tiles||liechtenstein|tilemaker-rs": {
+    "group": "tiles",
+    "variant": "",
+    "dataset": "liechtenstein",
+    "tool": "tilemaker-rs",
+    "seconds": 0.41,
+    "rssMB": 148,
+    "at": "2026-10-20T04:41:14.944Z"
+  },
+  "tiles||liechtenstein|C++ tilemaker": {
+    "group": "tiles",
+    "variant": "",
+    "dataset": "liechtenstein",
+    "tool": "C++ tilemaker",
+    "seconds": 1.45,
+    "rssMB": 2474,
+    "at": "2026-10-20T04:41:19.365Z"
+  },
+  "read||netherlands|@tilemaker-rs/node": {
+    "group": "read",
+    "variant": "",
+    "dataset": "netherlands",
+    "tool": "@tilemaker-rs/node",
+    "seconds": 22.36,
+    "rssMB": 738,
+    "at": "2026-10-20T05:36:09.921Z"
+  },
+  "read||netherlands|osm-pbf-parser": {
+    "group": "read",
+    "variant": "",
+    "dataset": "netherlands",
+    "tool": "osm-pbf-parser",
+    "seconds": 88.95,
+    "rssMB": 451,
+    "at": "2026-10-20T04:43:28.723Z"
+  },
+  "read||netherlands|osm-read": {
+    "group": "read",
+    "variant": "",
+    "dataset": "netherlands",
+    "tool": "osm-read",
+    "seconds": 160.8,
+    "rssMB": 309,
+    "at": "2026-10-20T04:46:09.536Z"
+  },
+  "filter||netherlands|@tilemaker-rs/node": {
+    "group": "filter",
+    "variant": "",
+    "dataset": "netherlands",
+    "tool": "@tilemaker-rs/node",
+    "seconds": 1.87,
+    "rssMB": 240,
+    "at": "2026-10-20T05:36:16.195Z"
+  },
+  "filter||netherlands|osm-pbf-parser": {
+    "group": "filter",
+    "variant": "",
+    "dataset": "netherlands",
+    "tool": "osm-pbf-parser",
+    "seconds": 87.81,
+    "rssMB": 435,
+    "at": "2026-10-20T04:47:43.025Z"
+  },
+  "filter||netherlands|osm-read": {
+    "group": "filter",
+    "variant": "",
+    "dataset": "netherlands",
+    "tool": "osm-read",
+    "seconds": 156.49,
+    "rssMB": 305,
+    "at": "2026-10-20T04:50:19.526Z"
+  },
+  "count||netherlands|tilemaker fileinfo": {
+    "group": "count",
+    "variant": "",
+    "dataset": "netherlands",
+    "tool": "tilemaker fileinfo",
+    "seconds": 3.58,
+    "rssMB": 105,
+    "at": "2026-10-20T04:50:30.639Z"
+  },
+  "count||netherlands|osmium fileinfo": {
+    "group": "count",
+    "variant": "",
+    "dataset": "netherlands",
+    "tool": "osmium fileinfo",
+    "seconds": 4.73,
+    "rssMB": 148,
+    "at": "2026-10-20T04:50:45.326Z"
+  },
+  "geography||netherlands|tilemaker export": {
+    "group": "geography",
+    "variant": "",
+    "dataset": "netherlands",
+    "tool": "tilemaker export",
+    "seconds": 2.13,
+    "rssMB": 128,
+    "at": "2026-10-20T05:36:22.901Z"
+  },
+  "geography||netherlands|Node writeGeoJSONSeq": {
+    "group": "geography",
+    "variant": "",
+    "dataset": "netherlands",
+    "tool": "Node writeGeoJSONSeq",
+    "seconds": 2.18,
+    "rssMB": 189,
+    "at": "2026-10-20T05:36:29.531Z"
+  },
+  "geography||netherlands|Node features() (objects)": {
+    "group": "geography",
+    "variant": "",
+    "dataset": "netherlands",
+    "tool": "Node features() (objects)",
+    "seconds": 2.16,
+    "rssMB": 187,
+    "at": "2026-10-20T05:36:36.136Z"
+  },
+  "geography||netherlands|osmium tags-filter + export": {
+    "group": "geography",
+    "variant": "",
+    "dataset": "netherlands",
+    "tool": "osmium tags-filter + export",
+    "seconds": 14.84,
+    "rssMB": 2216,
+    "at": "2026-10-20T04:51:20.238Z"
+  },
+  "geography||geography|tilemaker export": {
+    "group": "geography",
+    "variant": "",
+    "dataset": "geography",
+    "tool": "tilemaker export",
+    "seconds": 4.12,
+    "rssMB": 686,
+    "at": "2026-10-20T05:36:48.666Z"
+  },
+  "geography||geography|Node writeGeoJSONSeq": {
+    "group": "geography",
+    "variant": "",
+    "dataset": "geography",
+    "tool": "Node writeGeoJSONSeq",
+    "seconds": 4.12,
+    "rssMB": 765,
+    "at": "2026-10-20T05:37:01.113Z"
+  },
+  "geography||geography|Node features() (objects)": {
+    "group": "geography",
+    "variant": "",
+    "dataset": "geography",
+    "tool": "Node features() (objects)",
+    "seconds": 3.77,
+    "rssMB": 1080,
+    "at": "2026-10-20T05:37:12.548Z"
+  },
+  "geography||geography|osmium tags-filter + export": {
+    "group": "geography",
+    "variant": "",
+    "dataset": "geography",
+    "tool": "osmium tags-filter + export",
+    "seconds": 203.77,
+    "rssMB": 4193,
+    "at": "2026-10-20T04:55:20.185Z"
+  },
+  "within||geography|tilemaker export --within": {
+    "group": "within",
+    "variant": "",
+    "dataset": "geography",
+    "tool": "tilemaker export --within",
+    "seconds": 4.06,
+    "rssMB": 1064,
+    "at": "2026-10-20T05:37:24.899Z"
+  },
+  "within||geography|Node enrich.within": {
+    "group": "within",
+    "variant": "",
+    "dataset": "geography",
+    "tool": "Node enrich.within",
+    "seconds": 4.15,
+    "rssMB": 1133,
+    "at": "2026-10-20T05:37:37.484Z"
+  },
+  "extract|tags-filter geography|netherlands|tilemaker extract": {
+    "group": "extract",
+    "variant": "tags-filter geography",
+    "dataset": "netherlands",
+    "tool": "tilemaker extract",
+    "seconds": 5.01,
+    "rssMB": 144,
+    "at": "2026-10-20T04:56:00.609Z"
+  },
+  "extract|tags-filter geography|netherlands|osmium tags-filter": {
+    "group": "extract",
+    "variant": "tags-filter geography",
+    "dataset": "netherlands",
+    "tool": "osmium tags-filter",
+    "seconds": 13.64,
+    "rssMB": 2214,
+    "at": "2026-10-20T04:56:14.261Z"
+  },
+  "extract|bbox (Amsterdam)|netherlands|tilemaker extract": {
+    "group": "extract",
+    "variant": "bbox (Amsterdam)",
+    "dataset": "netherlands",
+    "tool": "tilemaker extract",
+    "seconds": 6.79,
+    "rssMB": 202,
+    "at": "2026-10-20T04:56:34.994Z"
+  },
+  "extract|bbox (Amsterdam)|netherlands|osmium extract": {
+    "group": "extract",
+    "variant": "bbox (Amsterdam)",
+    "dataset": "netherlands",
+    "tool": "osmium extract",
+    "seconds": 9.57,
+    "rssMB": 3960,
+    "at": "2026-10-20T04:57:04.044Z"
+  },
+  "tiles||netherlands|tilemaker-rs": {
+    "group": "tiles",
+    "variant": "",
+    "dataset": "netherlands",
+    "tool": "tilemaker-rs",
+    "seconds": 60.48,
+    "rssMB": 5861,
+    "at": "2026-10-20T04:58:04.735Z"
+  },
+  "tiles||netherlands|C++ tilemaker": {
+    "group": "tiles",
+    "variant": "",
+    "dataset": "netherlands",
+    "tool": "C++ tilemaker",
+    "seconds": 90.3,
+    "rssMB": 8290,
+    "at": "2026-10-20T04:59:35.065Z"
+  },
+  "count||planet|tilemaker fileinfo": {
+    "group": "count",
+    "variant": "",
+    "dataset": "planet",
+    "tool": "tilemaker fileinfo",
+    "seconds": 171.46,
+    "rssMB": 807,
+    "at": "2026-10-20T05:40:37.336Z"
+  },
+  "count||planet|osmium fileinfo": {
+    "group": "count",
+    "variant": "",
+    "dataset": "planet",
+    "tool": "osmium fileinfo",
+    "seconds": 180.81,
+    "rssMB": 962,
+    "at": "2026-10-20T05:43:38.160Z"
+  },
+  "geography||planet|tilemaker export": {
+    "group": "geography",
+    "variant": "",
+    "dataset": "planet",
+    "tool": "tilemaker export",
+    "seconds": 119.98,
+    "rssMB": 802,
+    "at": "2026-10-20T05:45:38.155Z"
+  },
+  "geography||planet|Node writeGeoJSONSeq": {
+    "group": "geography",
+    "variant": "",
+    "dataset": "planet",
+    "tool": "Node writeGeoJSONSeq",
+    "seconds": 118.56,
+    "rssMB": 958,
+    "at": "2026-10-20T05:47:36.726Z"
+  },
+  "geography||planet|Node features() (objects)": {
+    "group": "geography",
+    "variant": "",
+    "dataset": "planet",
+    "tool": "Node features() (objects)",
+    "seconds": 118.91,
+    "rssMB": 1303,
+    "at": "2026-10-20T05:49:35.645Z"
+  },
+  "geography||planet|osmium tags-filter + export": {
+    "group": "geography",
+    "variant": "",
+    "dataset": "planet",
+    "tool": "osmium tags-filter + export",
+    "seconds": 627.22,
+    "rssMB": 4186,
+    "at": "2026-10-20T06:00:02.904Z"
+  },
+  "within||planet|tilemaker export --within": {
+    "group": "within",
+    "variant": "",
+    "dataset": "planet",
+    "tool": "tilemaker export --within",
+    "seconds": 180.57,
+    "rssMB": 1379,
+    "at": "2026-10-20T06:03:03.482Z"
+  },
+  "within||planet|Node enrich.within": {
+    "group": "within",
+    "variant": "",
+    "dataset": "planet",
+    "tool": "Node enrich.within",
+    "seconds": 181.54,
+    "rssMB": 1455,
+    "at": "2026-10-20T06:06:05.032Z"
+  },
+  "extract|tags-filter geography|planet|tilemaker extract": {
+    "group": "extract",
+    "variant": "tags-filter geography",
+    "dataset": "planet",
+    "tool": "tilemaker extract",
+    "seconds": 257.18,
+    "rssMB": 918,
+    "at": "2026-10-20T06:10:22.220Z"
+  },
+  "extract|tags-filter geography|planet|osmium tags-filter": {
+    "group": "extract",
+    "variant": "tags-filter geography",
+    "dataset": "planet",
+    "tool": "osmium tags-filter",
+    "seconds": 424.46,
+    "rssMB": 2925,
+    "at": "2026-10-20T06:17:26.697Z"
+  }
+}

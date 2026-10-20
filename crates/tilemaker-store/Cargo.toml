@@ -2,7 +2,7 @@
 name = "tilemaker-store"
 edition.workspace = true
 version.workspace = true
-license.workspace = true
+license-file.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "tilemaker — id sets and node/way location stores for OpenStreetMap processing."

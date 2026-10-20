@@ -27,7 +27,7 @@ export_features(&file, &opts, |event| {
 
 Features match `osmium export`: on the world's administrative boundaries
 the same relations assemble with identical rings, points and areas. See
-the [engine docs](src/engine.rs) for the passes.
+the [engine docs](https://github.com/the-haus/tilemaker-rs/blob/main/crates/tilemaker-export/src/engine.rs) for the passes.
 
 Also in this crate:
 

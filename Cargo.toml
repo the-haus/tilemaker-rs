@@ -17,8 +17,8 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 version = "0.1.0"
-license = "FTWPL"
-repository = "https://github.com/systemed/tilemaker"
+license-file = "LICENCE.txt"
+repository = "https://github.com/the-haus/tilemaker-rs"
 rust-version = "1.87"
 
 [workspace.dependencies]

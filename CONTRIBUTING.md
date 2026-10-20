@@ -17,11 +17,37 @@ cd crates/bindings/tilemaker-node && corepack yarn install && corepack yarn buil
   area relation counts whatever its role).
 - Commits follow Conventional Commits (`feat:`, `fix:`, `perf:`, …).
 
-## Releasing the Node package
+## Releasing
 
-Bump `version` in `crates/bindings/tilemaker-node/package.json` (and the
-workspace version), update `CHANGELOG.md`, then push a `node-vX.Y.Z` tag:
-`.github/workflows/release-node.yml` builds the seven platform binaries and
-publishes the root package plus one `@tilemaker-rs/node-<triple>`
-subpackage per platform (needs the `NPM_TOKEN` secret and an
-`npm-publish` environment).
+One `vX.Y.Z` tag releases everything (`.github/workflows/release.yml`):
+
+1. `node scripts/bump-version.mjs X.Y.Z` sets the version of the Cargo
+   workspace, the pinned internal crate dependencies, the Node package and
+   `Cargo.lock`, and opens a `## X.Y.Z` section in `CHANGELOG.md`; fill it
+   in (it becomes the release notes) and commit.
+2. `node scripts/check-version.mjs vX.Y.Z` checks that everything agrees
+   (CI runs it on every push).
+3. Push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+
+The workflow then checks the versions against the tag, runs fmt, clippy and
+the tests, and in parallel:
+
+- publishes `@tilemaker-rs/node` and its eight platform packages
+  (`release-node.yml`: each binary is built and tested on its own platform,
+  and the packed tarballs are installed and used on every platform before
+  anything is published; prereleases such as `X.Y.Z-rc.1` go to the `next`
+  dist-tag, versions already on npm are skipped);
+- publishes the crates to crates.io in dependency order (`cargo publish
+  --workspace`);
+- builds `tilemaker` for Linux (x64, arm64), macOS (arm64, x64) and Windows
+  (x64);
+
+and finally creates the GitHub release with the notes, the binary archives
+and `SHA256SUMS`. Run the workflow by hand (`dry-run` on) to build and
+check everything without publishing.
+
+Repository settings it needs: the secrets `NPM_TOKEN` (or npm trusted
+publishing for this workflow) and `CARGO_REGISTRY_TOKEN`; environments
+`npm-publish` and `crates-publish` (add required reviewers to gate them).
+npm provenance needs `repository.url` in the package to point at this
+repository.

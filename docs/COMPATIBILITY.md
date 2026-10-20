@@ -1,6 +1,7 @@
-# Compatibility with tilemaker
+# Compatibility
 
-What carries over from the C++ tilemaker, and what does not.
+What carries over from the C++ tilemaker and from osmium, and what does
+not.
 
 ## Command line
 
@@ -18,8 +19,23 @@ What carries over from the C++ tilemaker, and what does not.
 | output `.mbtiles`/`.sqlite`, `.pmtiles`, directory | same |
 | multiple `--input` files | one input |
 
-Extra subcommands: `tilemaker export` (filtered features as GeoJSON lines)
-and `tilemaker inspect` (feature counts per zoom and layer).
+Extra subcommands: `tilemaker export` (filtered features as GeoJSON
+lines), `tilemaker extract` (PBF extracts), `tilemaker fileinfo` (file
+statistics) and `tilemaker inspect` (feature counts per zoom and layer).
+
+## osmium
+
+| osmium | here |
+|---|---|
+| `osmium tags-filter IN EXPR… -o OUT` | `tilemaker extract IN -f EXPR… -o OUT`, Node `extract()`: identical output (elements, tags, metadata) |
+| `tags-filter -R` (omit referenced) | `-R` / `omitReferenced` |
+| `tags-filter -i` (invert), `-t` (remove tags of referenced objects), `-e` (expressions file) | not supported |
+| `osmium extract -b BBOX` / `-p POLYGON` (`complete_ways`, the default) | `tilemaker extract -b` / `-p` (GeoJSON or `.poly`), Node `extract({ bbox \| polygon })`: identical output |
+| `extract -s simple` / `-s smart`, several extracts in one run (`-c`) | not supported |
+| `osmium extract` then `osmium tags-filter` | both options in one run |
+| `osmium export -f geojsonseq` | `tilemaker export`, Node `writeGeoJSONSeq()` / `features()`: the same geometries (areas assembled as osmium does); properties `@type`, `@id` (`-a type,id`), metadata as `@version`, `@timestamp`, …; no record separator unless `--record-separator` |
+| `osmium fileinfo -e` | `tilemaker fileinfo -e [--json]`, Node `fileInfo({ extended: true })`: the same counts, id ranges, bbox, timestamps, ordering, metadata (no CRC32, no buffer statistics) |
+| history files, change files, OSM XML/OPL input | not supported (PBF only) |
 
 ## config.json
 
@@ -60,11 +76,19 @@ too.
 | `Intersects`, `FindIntersecting`, `CoveredBy`, `FindCovering`, `AreaIntersecting` | report nothing (no shapefile layers), with a warning |
 | `attribute_function` | ignored, with a warning |
 
+Determinism: blocks are processed in parallel but merged in file order,
+so the same input gives the same tiles — except where a profile itself
+depends on Lua's table order: LuaJIT randomises string hashing per state,
+so `pairs()` over a table (the OpenMapTiles profile's `GetPOIRank` does
+this) can pick a different POI class from run to run, as in the C++
+tilemaker.
+
 ## Output
 
-Same tiles for the same input, within numerical differences: on Monaco
-and Liechtenstein with the OpenMapTiles profile, per zoom and layer feature
-counts are within 1% of the C++ build's (most layers identical). The
+Same tiles for the same input, within numerical differences: on Monaco,
+Liechtenstein and a 2.6 GB Netherlands extract with the OpenMapTiles
+profile, per zoom and layer feature counts are within 1% of the C++
+build's (most layers identical; 0.01% overall on the Netherlands). The
 remaining differences are single features on either side of a tile edge
 (label points from polylabel, polygon clipping slivers). Empty tiles are
 not written. MBTiles metadata (`json` with `vector_layers`, `bounds`,

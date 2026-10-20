@@ -1,12 +1,12 @@
 // Export features with the Node API and write one summary line per feature
 // (the format of fixtures/planet/*.tsv), reporting time and peak memory.
 //
-//   node bench/export-summary.mjs <file.osm.pbf> <out.tsv> [--filter EXPR]... [--types point,polygon] [--closed-ways both]
+//   node bench/tasks/export-summary.mjs <file.osm.pbf> <out.tsv> [--filter EXPR]... [--types point,polygon] [--closed-ways both]
 
 import { createWriteStream } from "node:fs";
 import { once } from "node:events";
 
-import { openPbf, polygonRings } from "../dist/index.js";
+import { openPbf, polygonRings } from "@tilemaker-rs/node";
 
 const args = process.argv.slice(2);
 const [input, output] = args;

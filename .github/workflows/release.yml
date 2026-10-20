@@ -1,0 +1,190 @@
+# Release everything for a v* tag (or a dry run by hand):
+#
+# 1. check: versions agree with the tag (scripts/check-version.mjs), the
+#    workspace builds and its tests pass, and the CHANGELOG section becomes
+#    the release notes;
+# 2. npm: @tilemaker-rs/node and its eight platform packages (release-node.yml);
+# 3. crates: the Rust crates on crates.io, in dependency order;
+# 4. cli: `tilemaker` binaries for Linux, macOS and Windows;
+# 5. github-release: a GitHub release with the notes, binaries and checksums.
+#
+# Secrets: NPM_TOKEN (or npm trusted publishing), CARGO_REGISTRY_TOKEN.
+# Environments: npm-publish, crates-publish (add reviewers to gate them).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Build and check everything but publish nothing.
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run }}
+
+jobs:
+  check:
+    name: check versions, build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-node-yarn
+      - id: version
+        name: versions agree (with the tag)
+        shell: bash
+        run: |
+          TAG=""
+          [[ "$GITHUB_REF" == refs/tags/v* ]] && TAG="$GITHUB_REF_NAME"
+          echo "version=$(node scripts/check-version.mjs ${TAG:+"$TAG"})" >> "$GITHUB_OUTPUT"
+      - name: release notes from CHANGELOG.md
+        shell: bash
+        env:
+          V: ${{ steps.version.outputs.version }}
+        run: |
+          awk -v v="$V" '$0 ~ "^## "v"( |$)" {on=1; next} on && /^## / {exit} on' CHANGELOG.md > notes.md
+          test -s notes.md
+      - uses: actions/upload-artifact@v5
+        with:
+          name: release-notes
+          path: notes.md
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: release-check
+          components: rustfmt,clippy
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked --release --exclude tilemaker-node
+      - name: the crates package
+        run: cargo package --workspace --exclude tilemaker-node --locked --no-verify
+
+  npm:
+    needs: check
+    uses: ./.github/workflows/release-node.yml
+    with:
+      dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run }}
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    permissions:
+      contents: read
+      id-token: write
+
+  crates:
+    name: publish crates
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: crates-publish
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: release-crates
+      # Publishes the workspace members in dependency order, waiting for
+      # each to appear in the index (needs cargo 1.90+).
+      - name: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        shell: bash
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            cargo publish --workspace --exclude tilemaker-node --locked --dry-run
+          else
+            cargo publish --workspace --exclude tilemaker-node --locked
+          fi
+
+  cli:
+    name: tilemaker ${{ matrix.target }}
+    needs: check
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: macos-latest, target: x86_64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: release-cli-${{ matrix.target }}
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --locked -p tilemaker-cli --target ${{ matrix.target }}
+      - name: package
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          NAME="tilemaker-$VERSION-$TARGET"
+          mkdir -p "dist/$NAME"
+          EXE=tilemaker; [[ "$TARGET" == *windows* ]] && EXE=tilemaker.exe
+          cp "target/$TARGET/release/$EXE" README.md CHANGELOG.md LICENCE.txt "dist/$NAME/"
+          cp -r resources "dist/$NAME/"
+          cd dist
+          if [[ "$TARGET" == *windows* ]]; then
+            7z a -tzip "$NAME.zip" "$NAME" >/dev/null
+          else
+            tar -czf "$NAME.tar.gz" "$NAME"
+          fi
+          rm -rf "$NAME"
+      - name: smoke test
+        if: matrix.target != 'x86_64-apple-darwin'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          EXE=tilemaker; [[ "$TARGET" == *windows* ]] && EXE=tilemaker.exe
+          "target/$TARGET/release/$EXE" --version
+          "target/$TARGET/release/$EXE" fileinfo -e crates/bindings/tilemaker-node/test/fixtures/town.osm.pbf
+      - uses: actions/upload-artifact@v5
+        with:
+          name: cli-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  github-release:
+    name: GitHub release
+    needs: [check, npm, crates, cli]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: dist
+      - name: checksums
+        working-directory: dist
+        run: sha256sum tilemaker-* > SHA256SUMS && cat SHA256SUMS
+      - name: create the release
+        if: env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+        shell: bash
+        run: |
+          PRE=(); [[ "$VERSION" == *-* ]] && PRE=(--prerelease)
+          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --title "v$VERSION" --notes-file dist/notes.md "${PRE[@]}" \
+            dist/tilemaker-* dist/SHA256SUMS

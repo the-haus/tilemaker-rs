@@ -1,0 +1,18 @@
+{
+  "name": "@tilemaker-rs/bench",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Benchmarks of @tilemaker-rs/node and the tilemaker CLI against osmium, C++ tilemaker, osm-pbf-parser and osm-read.",
+  "license": "FTWPL",
+  "type": "module",
+  "scripts": {
+    "bench": "node run.mjs"
+  },
+  "dependencies": {
+    "@tilemaker-rs/node": "workspace:*"
+  },
+  "devDependencies": {
+    "osm-pbf-parser": "^2.3.0",
+    "osm-read": "^0.7.0"
+  }
+}

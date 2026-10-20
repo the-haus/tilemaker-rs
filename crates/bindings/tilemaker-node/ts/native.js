@@ -20,19 +20,17 @@ const { platform, arch } = process;
 const { existsSync } = require("node:fs");
 const { join } = require("node:path");
 
+// A glibc build of Node reports the glibc it runs on; a musl build does not.
+// (`ldd --version` is no help: musl's prints to stderr and exits 1.)
 function isMuslLibc() {
   try {
     const header = process.report?.getReport()?.header;
-    if (header && "glibcVersionRuntime" in header) return false;
+    if (header) return !header.glibcVersionRuntime;
   } catch {
     /* ignore */
   }
   try {
-    const out = require("node:child_process")
-      .execSync("ldd --version", { stdio: ["ignore", "pipe", "pipe"] })
-      .toString()
-      .toLowerCase();
-    return out.includes("musl");
+    return require("node:fs").readFileSync("/usr/bin/ldd", "utf8").includes("musl");
   } catch {
     return false;
   }

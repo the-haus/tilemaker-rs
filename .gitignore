@@ -10,3 +10,6 @@ fixtures/*.log
 fixtures/planet/
 fixtures/*.mbtiles
 fixtures/*.pmtiles
+bench/.work/
+/packages/
+/install-check/

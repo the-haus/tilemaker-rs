@@ -2,12 +2,12 @@
   "name": "@tilemaker-rs/node",
   "version": "0.1.0",
   "description": "Stream OpenStreetMap data out of .osm.pbf files in Node.js: filtered elements and assembled points, lines and multipolygons, fast and with bounded memory (Rust, N-API).",
-  "license": "FTWPL",
+  "license": "SEE LICENSE IN LICENSE",
   "packageManager": "yarn@4.5.1",
-  "homepage": "https://github.com/systemed/tilemaker#readme",
+  "homepage": "https://github.com/the-haus/tilemaker-rs/tree/main/crates/bindings/tilemaker-node#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/systemed/tilemaker.git",
+    "url": "git+https://github.com/the-haus/tilemaker-rs.git",
     "directory": "crates/bindings/tilemaker-node"
   },
   "keywords": [
@@ -56,7 +56,8 @@
         "aarch64-unknown-linux-musl",
         "x86_64-apple-darwin",
         "aarch64-apple-darwin",
-        "x86_64-pc-windows-msvc"
+        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc"
       ]
     }
   },
