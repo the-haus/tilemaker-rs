@@ -188,6 +188,8 @@ pub struct Feature {
     pub geometry: Geometry,
     /// Metadata, when requested.
     pub meta: Option<Meta>,
+    /// Computed values (area, length, …, parent relations), as requested.
+    pub extras: crate::enrich::Extras,
 }
 
 impl Feature {

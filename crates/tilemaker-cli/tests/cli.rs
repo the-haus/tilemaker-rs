@@ -179,6 +179,55 @@ fn exports_geojson_lines() {
 }
 
 #[test]
+fn export_enrichments_and_transforms() {
+    let d = dir("enrich");
+    let pbf = fixture(&d);
+    let o = bin()
+        .args([
+            "export",
+            pbf.to_str().unwrap(),
+            "-f",
+            "w/highway",
+            "-f",
+            "r/landuse",
+            "--area",
+            "--length",
+            "--centroid",
+            "--label-point",
+            "--feature-bbox",
+            "--member-of",
+            "--clip",
+            "0,0,0.01,0.02",
+            "--precision",
+            "3",
+        ])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let lines: Vec<serde_json::Value> = String::from_utf8(o.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 2);
+    let road = &lines[0];
+    assert_eq!(road["id"], "way/100");
+    assert_eq!(road["bbox"], serde_json::json!([0.001, 0.001, 0.01, 0.001]));
+    assert!(road["properties"]["@length"].as_f64().unwrap() > 1000.0);
+    assert_eq!(road["properties"]["@memberOf"], serde_json::json!([]));
+    let meadow = &lines[1];
+    assert_eq!(meadow["geometry"]["type"], "MultiPolygon");
+    assert!(meadow["properties"]["@area"].as_f64().unwrap() > 1e6);
+    assert_eq!(meadow["properties"]["@labelPoint"].as_array().unwrap().len(), 2);
+    // Unknown filters are errors.
+    let o = bin()
+        .args(["export", pbf.to_str().unwrap(), "--member-of", "=x"])
+        .output()
+        .unwrap();
+    assert!(!o.status.success());
+}
+
+#[test]
 fn reports_errors() {
     let d = dir("errors");
     let pbf = fixture(&d);

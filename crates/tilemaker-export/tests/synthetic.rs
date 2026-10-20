@@ -684,3 +684,54 @@ fn element_bbox_uses_locations_on_ways() {
     let (es, _) = elements(&path, &opts);
     assert_eq!(es.iter().map(|e| e.id).collect::<Vec<_>>(), vec![2]);
 }
+
+#[test]
+fn member_of_enrich_and_transform() {
+    let path = town(sorted());
+    let opts = FeatureOptions {
+        common: CommonOptions {
+            filters: filters(&["w/highway", "n/amenity", "r/landuse"]),
+            ..Default::default()
+        },
+        enrich: Enrich {
+            area: true,
+            length: true,
+            centroid: true,
+            label_point: true,
+            bbox: true,
+        },
+        member_of: Some(FilterSet::default()),
+        ..Default::default()
+    };
+    let (fs, stats) = features(&path, &opts);
+    let get = |id: i64| fs.iter().find(|f| f.id == id).unwrap();
+    let street = get(100);
+    let parents = street.extras.member_of.as_ref().unwrap();
+    assert_eq!(parents.len(), 1);
+    assert_eq!((parents[0].id, parents[0].role.as_str()), (202, ""));
+    assert!(parents[0].tags.iter().any(|(k, v)| k == "route" && v == "bus"));
+    let cafe = get(20);
+    assert_eq!(cafe.extras.member_of, Some(vec![]));
+    assert_eq!(cafe.extras.centroid, Some([0.5, 0.5]));
+    assert!(street.extras.length.unwrap() > 111_000.0);
+    let meadow = get(200);
+    assert!(meadow.extras.area.unwrap() > 1e10);
+    assert_eq!(meadow.extras.bbox, Some([0.0, 0.0, 1.0, 1.0]));
+    assert!(stats.store_bytes > 0);
+
+    // Only route relations; and a clip that cuts the street in half.
+    let opts = FeatureOptions {
+        member_of: Some(filters(&["route=tram"])),
+        transform: Transform {
+            clip: Some([0.0, -1.0, 0.5, 1.0]),
+            ..Default::default()
+        },
+        enrich: Enrich::default(),
+        ..opts
+    };
+    let (fs, _) = features(&path, &opts);
+    let street = fs.iter().find(|f| f.id == 100).unwrap();
+    assert_eq!(street.extras.member_of, Some(vec![]));
+    assert_eq!(street.geometry.coords, vec![0.0, 0.0, 0.5, 0.0]);
+    assert!(street.extras.area.is_none());
+}

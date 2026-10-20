@@ -13,15 +13,20 @@
 
 pub mod area;
 pub mod engine;
+pub mod enrich;
 pub mod filter;
+pub mod geojson;
+mod parents;
 pub mod record;
 
 pub use area::ClosedWays;
 pub use engine::{
-    export_elements, export_elements_from_reader, export_features, CommonOptions, ElementOptions, Event, ExportStats,
-    FeatureOptions, Flow, GeometryTypes, NodeStorage, Phase, Progress,
+    export_elements, export_elements_from_reader, export_features, export_features_with, CommonOptions, ElementOptions,
+    Event, ExportStats, FeatureOptions, Flow, GeometryTypes, NodeStorage, Phase, Progress, Weight,
 };
+pub use enrich::{Enrich, Extras, Parent, Transform};
 pub use filter::{BlockFilter, FilterParseError, FilterSet, TagFilter};
+pub use geojson::{write_geojson_seq, GeoJsonOptions};
 pub use record::{Element, Feature, Geometry, GeometryType, MemberRecord, Meta, TagSelection};
 pub use tilemaker_pbf::{ElementType, PbfFile};
 
@@ -40,4 +45,7 @@ pub enum ExportError {
     /// Options that cannot work together.
     #[error("{0}")]
     Invalid(String),
+    /// Writing output failed.
+    #[error("writing: {0}")]
+    Io(#[from] std::io::Error),
 }

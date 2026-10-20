@@ -30,7 +30,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Stream filtered, assembled features as newline-delimited GeoJSON.
-    Export(ExportArgs),
+    Export(Box<ExportArgs>),
     /// Count features per zoom and layer in an .mbtiles or .pmtiles file.
     Inspect {
         /// The tileset.
@@ -115,6 +115,40 @@ struct ExportArgs {
     /// Number of threads (0: all cores).
     #[arg(long, default_value_t = 0)]
     threads: usize,
+    /// Add metadata: @version, @timestamp, @changeset, @uid, @user.
+    #[arg(long)]
+    metadata: bool,
+    /// Clip geometries to minlon,minlat,maxlon,maxlat.
+    #[arg(long, value_parser = parse_bbox)]
+    clip: Option<[f64; 4]>,
+    /// Simplify geometries (Douglas–Peucker tolerance in degrees).
+    #[arg(long, value_name = "DEGREES")]
+    simplify: Option<f64>,
+    /// Round coordinates to this many decimals.
+    #[arg(long, value_name = "DECIMALS")]
+    precision: Option<u8>,
+    /// Add @area (m²).
+    #[arg(long)]
+    area: bool,
+    /// Add @length (m; the perimeter of polygons).
+    #[arg(long)]
+    length: bool,
+    /// Add @centroid.
+    #[arg(long)]
+    centroid: bool,
+    /// Add @labelPoint (polygons' pole of inaccessibility, lines' midpoint).
+    #[arg(long)]
+    label_point: bool,
+    /// Add each feature's bounding box (GeoJSON "bbox").
+    #[arg(long)]
+    feature_bbox: bool,
+    /// Add @memberOf: the relations each element belongs to, of those these
+    /// filters select (none: all relations).
+    #[arg(long, num_args = 0.., value_name = "FILTER")]
+    member_of: Option<Vec<String>>,
+    /// Start each feature with a record separator (RFC 8142).
+    #[arg(long)]
+    record_separator: bool,
 }
 
 fn parse_bbox(s: &str) -> Result<[f64; 4], String> {
@@ -138,7 +172,7 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Some(Command::Export(a)) => export(a),
+        Some(Command::Export(a)) => export(*a),
         Some(Command::Inspect {
             path,
             json,
@@ -276,45 +310,43 @@ fn export(a: ExportArgs) -> Result<()> {
             } else {
                 TagSelection::keys(&a.tags)
             },
+            metadata: a.metadata,
             bbox: a.bbox,
             threads: a.threads,
             node_storage: match a.node_store_file {
                 Some(p) => NodeStorage::DenseFile(p),
                 None => NodeStorage::Memory,
             },
-            ..Default::default()
         },
         geometry_types: gt,
         closed_ways,
         relation_lines: a.relation_lines,
+        transform: Transform {
+            clip: a.clip,
+            simplify: a.simplify,
+            precision: a.precision,
+        },
+        enrich: Enrich {
+            area: a.area,
+            length: a.length,
+            centroid: a.centroid,
+            label_point: a.label_point,
+            bbox: a.feature_bbox,
+        },
+        member_of: a.member_of.as_deref().map(FilterSet::parse).transpose()?,
     };
     let out: Box<dyn Write> = match &a.output {
         Some(p) => Box::new(std::fs::File::create(p).with_context(|| format!("creating {}", p.display()))?),
         None => Box::new(std::io::stdout().lock()),
     };
     let mut out = BufWriter::with_capacity(1 << 20, out);
-    let mut err = None;
-    let stats = export_features(&file, &opts, |e| {
-        if let Event::Batch(b) = e {
-            for f in b {
-                if let Err(e) = serde_json::to_writer(&mut out, &f.to_geojson())
-                    .map_err(std::io::Error::from)
-                    .and_then(|_| out.write_all(b"\n"))
-                {
-                    err = Some(e);
-                    return Flow::Stop;
-                }
-            }
-        }
-        Flow::Continue
-    })?;
-    if let Some(e) = err {
-        if e.kind() != std::io::ErrorKind::BrokenPipe {
-            return Err(e.into());
-        }
-        return Ok(());
-    }
-    out.flush()?;
+    let geojson = GeoJsonOptions {
+        record_separator: a.record_separator,
+    };
+    let stats = match write_geojson_seq(&file, &opts, geojson, &mut out, |_| Flow::Continue) {
+        Err(ExportError::Io(e)) if e.kind() == std::io::ErrorKind::BrokenPipe => return Ok(()),
+        r => r?,
+    };
     eprintln!("{}", serde_json::to_string(&stats)?);
     Ok(())
 }

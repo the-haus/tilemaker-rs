@@ -29,7 +29,10 @@ use tilemaker_store::{
 };
 
 use crate::area::ClosedWays;
+use crate::enrich::Extras;
+use crate::enrich::{Enrich, Transform};
 use crate::filter::{BlockFilter, FilterSet};
+use crate::parents::{BlockParents, Parents};
 use crate::record::{Element, Feature, Geometry, GeometryType, MemberRecord, Meta, TagSelection};
 use crate::ExportError;
 
@@ -112,6 +115,13 @@ pub struct FeatureOptions {
     /// Also turn non-area relations (routes, waterways, …) into
     /// multi-linestrings.
     pub relation_lines: bool,
+    /// Change geometries before they are emitted: clip, simplify, round.
+    pub transform: Transform,
+    /// Values to compute for each feature (area, length, …).
+    pub enrich: Enrich,
+    /// Give each feature the relations its element is a member of, of
+    /// those these filters select (an empty set: every tagged relation).
+    pub member_of: Option<FilterSet>,
 }
 
 /// Options for [`export_elements`].
@@ -275,6 +285,12 @@ struct Shared {
     closed_ways: ClosedWays,
     relation_lines: bool,
     locations_on_ways: bool,
+    transform: Transform,
+    enrich: Enrich,
+    member_of: Option<FilterSet>,
+    /// Memberships per block (filled by the relations scan, then merged).
+    parent_blocks: std::sync::Mutex<Vec<(usize, BlockParents)>>,
+    parents: RwLock<Option<Parents>>,
     /// Ways that selected relations need (filled, then frozen).
     needed_ways_builder: RwLock<Option<IdSetBuilder>>,
     needed_ways: RwLock<IdSet>,
@@ -298,6 +314,50 @@ impl Shared {
             None => true,
             Some(f) => !(b[2] < f[0] || b[0] > f[2] || b[3] < f[1] || b[1] > f[3]),
         }
+    }
+
+    /// Finish a feature (bbox test, transform, extras), count it and add it
+    /// to `out`.
+    #[allow(clippy::too_many_arguments)]
+    fn emit(
+        &self,
+        out: &mut Vec<Feature>,
+        parents: Option<&Parents>,
+        kind: ElementType,
+        id: i64,
+        tags: &Tags<'_>,
+        geometry: Geometry,
+        meta: Option<Meta>,
+    ) {
+        if !self.in_bbox(geometry.bbox()) {
+            return;
+        }
+        let Some(geometry) = self.transform.apply(geometry) else {
+            return;
+        };
+        let mut extras = if self.enrich.any() {
+            self.enrich.compute(&geometry)
+        } else {
+            Extras::default()
+        };
+        if let Some(p) = parents {
+            extras.member_of = Some(p.of(kind, id));
+        }
+        let c = match geometry.kind {
+            GeometryType::Point => &self.counters.points,
+            GeometryType::LineString => &self.counters.lines,
+            GeometryType::MultiLineString => &self.counters.multi_lines,
+            GeometryType::MultiPolygon => &self.counters.polygons,
+        };
+        self.counters.add(c, 1);
+        out.push(Feature {
+            kind,
+            id,
+            tags: self.tags.apply(tags),
+            geometry,
+            meta,
+            extras,
+        });
     }
 
     fn way_is_closed(w: &Way<'_>) -> bool {
@@ -344,8 +404,42 @@ impl Shared {
 pub fn export_features(
     file: &PbfFile,
     opts: &FeatureOptions,
-    mut sink: impl FnMut(Event<Feature>) -> Flow,
+    sink: impl FnMut(Event<Feature>) -> Flow,
 ) -> Result<ExportStats, ExportError> {
+    export_features_with(file, opts, |f| f, sink)
+}
+
+/// How many records an item handed to the sink stands for.
+pub trait Weight {
+    /// The number of records.
+    fn weight(&self) -> u64 {
+        1
+    }
+}
+
+impl Weight for Feature {}
+impl Weight for Element {}
+
+/// What a pass does with one block.
+type BlockFn<T> = dyn Fn(usize, &PrimitiveBlock) -> Result<Vec<T>, ExportError> + Send + Sync;
+
+/// [`export_features`] with each block's features turned into something
+/// else by `map` on the worker threads (e.g. serialised), in file order.
+pub fn export_features_with<U, M>(
+    file: &PbfFile,
+    opts: &FeatureOptions,
+    map: M,
+    mut sink: impl FnMut(Event<U>) -> Flow,
+) -> Result<ExportStats, ExportError>
+where
+    U: Weight + Send + 'static,
+    M: Fn(Vec<Feature>) -> Vec<U> + Send + Sync + 'static,
+{
+    let map = Arc::new(map);
+    let mapped = |f: Box<BlockFn<Feature>>| {
+        let map = map.clone();
+        move |i: usize, b: &PrimitiveBlock| f(i, b).map(|v| if v.is_empty() { Vec::new() } else { map(v) })
+    };
     let started = Instant::now();
     let c = &opts.common;
     let nthreads = threads(c.threads);
@@ -360,6 +454,11 @@ pub fn export_features(
         closed_ways: opts.closed_ways,
         relation_lines: opts.relation_lines,
         locations_on_ways: file.header().has_locations_on_ways(),
+        transform: opts.transform,
+        enrich: opts.enrich,
+        member_of: opts.member_of.clone(),
+        parent_blocks: std::sync::Mutex::new(Vec::new()),
+        parents: RwLock::new(None),
         needed_ways_builder: RwLock::new(Some(IdSetBuilder::new())),
         needed_ways: RwLock::new(IdSet::new()),
         needed_nodes_builder: RwLock::new(Some(IdSetBuilder::new())),
@@ -389,14 +488,21 @@ pub fn export_features(
         o
     };
 
-    // 1. Relations scan.
-    if want_rels {
+    // 1. Relations scan (also collecting memberships for member_of).
+    if want_rels || opts.member_of.is_some() {
         let s = shared.clone();
         runner.pass(
             Phase::ScanRelations,
             only(ElementType::Relation),
             &mut sink,
-            move |_, b| {
+            move |i, b| {
+                if let Some(f) = &s.member_of {
+                    let found = BlockParents::scan(b, f);
+                    s.parent_blocks.lock().unwrap().push((i, found));
+                }
+                if !want_rels {
+                    return Ok(Vec::new());
+                }
                 let guard = s.needed_ways_builder.read().unwrap();
                 let set = guard.as_ref().unwrap();
                 let bf = s.filters.for_block(b);
@@ -415,6 +521,13 @@ pub fn export_features(
                 Ok(Vec::new())
             },
         )?;
+    }
+    if opts.member_of.is_some() {
+        let mut blocks = std::mem::take(&mut *shared.parent_blocks.lock().unwrap());
+        blocks.sort_unstable_by_key(|(i, _)| *i);
+        let parents = Parents::merge(blocks.into_iter().map(|(_, p)| p).collect());
+        stats.store_bytes += parents.heap_bytes() as u64;
+        *shared.parents.write().unwrap() = Some(parents);
     }
     freeze_set(&shared.needed_ways_builder, &shared.needed_ways);
     let any_needed_ways = !shared.needed_ways.read().unwrap().is_empty();
@@ -482,8 +595,9 @@ pub fn export_features(
             blocks,
             meta_opts(only(ElementType::Node)),
             &mut sink,
-            move |_, b| {
+            mapped(Box::new(move |_, b| {
                 let needed_nodes = s.needed_nodes.read().unwrap();
+                let parents = s.parents.read().unwrap();
                 let mut out = Vec::new();
                 let mut batch: Vec<(i64, Location)> = Vec::new();
                 let bf = s.filters.for_block(b);
@@ -492,30 +606,29 @@ pub fn export_features(
                         batch.push((n.id(), (n.lat_e7(), n.lon_e7())));
                     }
                     if want_points && !n.tags().is_empty() && bf.matches(ElementType::Node, false, &n.tags()) {
-                        let (lon, lat) = (n.lon(), n.lat());
-                        if !s.in_bbox([lon, lat, lon, lat]) {
-                            continue;
-                        }
-                        out.push(Feature {
-                            kind: ElementType::Node,
-                            id: n.id(),
-                            tags: s.tags.apply(&n.tags()),
-                            geometry: Geometry {
-                                kind: GeometryType::Point,
-                                coords: vec![lon, lat],
-                                parts: Vec::new(),
-                                polygons: Vec::new(),
-                            },
-                            meta: if s.metadata { Meta::from_ref(n.info()) } else { None },
-                        });
+                        let geometry = Geometry {
+                            kind: GeometryType::Point,
+                            coords: vec![n.lon(), n.lat()],
+                            parts: Vec::new(),
+                            polygons: Vec::new(),
+                        };
+                        let meta = if s.metadata { Meta::from_ref(n.info()) } else { None };
+                        s.emit(
+                            &mut out,
+                            parents.as_ref(),
+                            ElementType::Node,
+                            n.id(),
+                            &n.tags(),
+                            geometry,
+                            meta,
+                        );
                     }
                 }
                 if !batch.is_empty() {
                     s.nodes.read().unwrap().as_ref().unwrap().insert(&mut batch)?;
                 }
-                s.counters.add(&s.counters.points, out.len() as u64);
                 Ok(out)
-            },
+            })),
         )?;
     }
     *shared.needed_nodes.write().unwrap() = IdSet::new();
@@ -534,8 +647,9 @@ pub fn export_features(
             blocks,
             meta_opts(only(ElementType::Way)),
             &mut sink,
-            move |_, b| {
+            mapped(Box::new(move |_, b| {
                 let needed_ways = s.needed_ways.read().unwrap();
+                let parents = s.parents.read().unwrap();
                 let store = s.node_store.read().unwrap();
                 let mut nodes = store.as_ref().map(|ns| ns.cursor());
                 let mut out = Vec::new();
@@ -563,23 +677,17 @@ pub fn export_features(
                         .iter()
                         .flat_map(|&(lat, lon)| [lon as f64 / 1e7, lat as f64 / 1e7])
                         .collect();
-                    let tags = s.tags.apply(&w.tags());
                     let meta = if s.metadata { Meta::from_ref(w.info()) } else { None };
-                    let mut emit = |geometry: Geometry, tags: Vec<(String, String)>| {
-                        if s.in_bbox(geometry.bbox()) {
-                            let c = match geometry.kind {
-                                GeometryType::MultiPolygon => &s.counters.polygons,
-                                _ => &s.counters.lines,
-                            };
-                            s.counters.add(c, 1);
-                            out.push(Feature {
-                                kind: ElementType::Way,
-                                id: w.id(),
-                                tags,
-                                geometry,
-                                meta: meta.clone(),
-                            });
-                        }
+                    let mut emit = |geometry: Geometry, meta: Option<Meta>| {
+                        s.emit(
+                            &mut out,
+                            parents.as_ref(),
+                            ElementType::Way,
+                            w.id(),
+                            &w.tags(),
+                            geometry,
+                            meta,
+                        );
                     };
                     if poly {
                         let mut g = Geometry {
@@ -589,25 +697,23 @@ pub fn export_features(
                             polygons: vec![1],
                         };
                         orient_ring_ccw(&mut g.coords);
-                        emit(g, tags.clone());
+                        emit(g, meta.clone());
                     }
                     if line {
-                        emit(
-                            Geometry {
-                                kind: GeometryType::LineString,
-                                coords,
-                                parts: Vec::new(),
-                                polygons: Vec::new(),
-                            },
-                            tags,
-                        );
+                        let g = Geometry {
+                            kind: GeometryType::LineString,
+                            coords,
+                            parts: Vec::new(),
+                            polygons: Vec::new(),
+                        };
+                        emit(g, meta);
                     }
                 }
                 if !batch.is_empty() {
                     s.ways.read().unwrap().as_ref().unwrap().insert(batch);
                 }
                 Ok(out)
-            },
+            })),
         )?;
     }
     if !refs_mode {
@@ -620,7 +726,9 @@ pub fn export_features(
     // 5. Relations.
     if !runner.stopped && want_rels {
         let s = shared.clone();
+        let map = map.clone();
         runner.pass_relations(meta_opts(only(ElementType::Relation)), &mut sink, move |b, range| {
+            let parents = s.parents.read().unwrap();
             let way_store = s.way_store.read().unwrap();
             let way_store = way_store.as_ref().unwrap();
             let ref_store = s.ref_store.read().unwrap();
@@ -697,23 +805,18 @@ pub fn export_features(
                     }
                     g
                 };
-                if !s.in_bbox(geometry.bbox()) {
-                    continue;
-                }
-                let c = match geometry.kind {
-                    GeometryType::MultiPolygon => &s.counters.polygons,
-                    _ => &s.counters.multi_lines,
-                };
-                s.counters.add(c, 1);
-                out.push(Feature {
-                    kind: ElementType::Relation,
-                    id: r.id(),
-                    tags: s.tags.apply(&r.tags()),
+                let meta = if s.metadata { Meta::from_ref(r.info()) } else { None };
+                s.emit(
+                    &mut out,
+                    parents.as_ref(),
+                    ElementType::Relation,
+                    r.id(),
+                    &r.tags(),
                     geometry,
-                    meta: if s.metadata { Meta::from_ref(r.info()) } else { None },
-                });
+                    meta,
+                );
             }
-            Ok(out)
+            Ok(if out.is_empty() { Vec::new() } else { map(out) })
         })?;
     }
     drop(shared.way_store.write().unwrap().take());
@@ -862,7 +965,7 @@ fn relation_chunks(block: &PrimitiveBlock) -> Vec<std::ops::Range<usize>> {
 
 impl Runner<'_> {
     /// The relations pass, parallel over small chunks of relations.
-    fn pass_relations<T: Send + 'static>(
+    fn pass_relations<T: Weight + Send + 'static>(
         &mut self,
         opts: DecodeOptions,
         sink: &mut impl FnMut(Event<T>) -> Flow,
@@ -899,7 +1002,7 @@ impl Runner<'_> {
         for r in results {
             let (n, last, batch) = r?;
             if !batch.is_empty() {
-                self.emitted += batch.len() as u64;
+                self.emitted += batch.iter().map(Weight::weight).sum::<u64>();
                 if sink(Event::Batch(batch)) == Flow::Stop {
                     self.stopped = true;
                     return Ok(());
@@ -950,7 +1053,7 @@ impl Runner<'_> {
             .blocks_with_ids(range, kind, self.threads, |lo, hi| ids.any_in_range(lo, hi))?)
     }
 
-    fn pass<T: Send + 'static>(
+    fn pass<T: Weight + Send + 'static>(
         &mut self,
         phase: Phase,
         opts: DecodeOptions,
@@ -962,7 +1065,7 @@ impl Runner<'_> {
     }
 
     /// A pass over a given list of blocks.
-    fn pass_blocks<T: Send + 'static>(
+    fn pass_blocks<T: Weight + Send + 'static>(
         &mut self,
         phase: Phase,
         blocks: Vec<usize>,
@@ -983,7 +1086,7 @@ impl Runner<'_> {
         for (done, r) in results.enumerate() {
             let batch = r?;
             if !batch.is_empty() {
-                self.emitted += batch.len() as u64;
+                self.emitted += batch.iter().map(Weight::weight).sum::<u64>();
                 if sink(Event::Batch(batch)) == Flow::Stop {
                     self.stopped = true;
                     return Ok(());

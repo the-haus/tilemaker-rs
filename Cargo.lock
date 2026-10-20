@@ -1109,6 +1109,8 @@ dependencies = [
 name = "tilemaker-export"
 version = "0.1.0"
 dependencies = [
+ "geo",
+ "polylabel",
  "serde",
  "serde_json",
  "thiserror",
