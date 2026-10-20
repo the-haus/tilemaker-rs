@@ -15,6 +15,7 @@ pub mod clip;
 pub mod compact;
 pub mod coords;
 pub mod measure;
+pub mod packed;
 pub mod simplify;
 pub mod tiles;
 pub mod valid;

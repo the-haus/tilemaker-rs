@@ -5,12 +5,12 @@ use std::collections::HashMap;
 
 use tilemaker_config::{Config, LayerDef};
 use tilemaker_geom::clip::clip_linestring;
-use tilemaker_geom::compact::{to_coords, CompactPolygons};
 use tilemaker_geom::coords::{meter2degp, tiley2latp, TileCoord};
+use tilemaker_geom::packed;
 use tilemaker_geom::simplify::{simplify_linestring, simplify_multipolygon};
 use tilemaker_geom::valid::{orient_multipolygon, repair_multipolygon, union_many};
 use tilemaker_geom::{ll_to_coord, Coord, LineString, MultiLineString, MultiPolygon, Rect, TileBbox};
-use tilemaker_lua::{AttributeValue, GeometryKind, OutputGeometry};
+use tilemaker_lua::{AttributeValue, GeometryKind};
 use tilemaker_mvt::{GeomType, LayerBuilder, TileBuilder, Value};
 
 use crate::data::{OutputObject, TileData};
@@ -177,16 +177,18 @@ impl Renderer {
                 GeometryKind::Point => self.write_points(layer, &o, run, z, bbox),
                 GeometryKind::LineString | GeometryKind::MultiLineString => {
                     let mut mls = MultiLineString::new(Vec::new());
+                    let mut line = Vec::new();
                     for &r in run {
-                        match &self.data.geometries[self.data.objects[r as usize].geometry as usize] {
-                            OutputGeometry::LineString(ls) => {
-                                clip_linestring(&to_coords(ls), &bbox.clipping_box, &mut mls)
+                        let obj = &self.data.objects[r as usize];
+                        let rec = self.data.geometries.record(obj.geometry);
+                        match obj.kind {
+                            GeometryKind::LineString => {
+                                packed::decode_line(rec, &mut line);
+                                clip_linestring(&line, &bbox.clipping_box, &mut mls)
                             }
-                            OutputGeometry::MultiLineString(m) => {
-                                for ls in m.lines() {
-                                    clip_linestring(&to_coords(ls), &bbox.clipping_box, &mut mls);
-                                }
-                            }
+                            GeometryKind::MultiLineString => packed::for_each_line(rec, |ls| {
+                                clip_linestring(ls, &bbox.clipping_box, &mut mls);
+                            }),
                             _ => {}
                         }
                     }
@@ -198,13 +200,10 @@ impl Renderer {
                 GeometryKind::Polygon => {
                     let mut parts = Vec::with_capacity(run.len());
                     for &r in run {
-                        if let OutputGeometry::MultiPolygon(mp) =
-                            &self.data.geometries[self.data.objects[r as usize].geometry as usize]
-                        {
-                            let c = clip_compact(mp, &bbox.clipping_box);
-                            if !c.0.is_empty() {
-                                parts.push(c);
-                            }
+                        let obj = &self.data.objects[r as usize];
+                        let c = clip_packed(self.data.geometries.record(obj.geometry), &bbox.clipping_box);
+                        if !c.0.is_empty() {
+                            parts.push(c);
                         }
                     }
                     let mut mp = if parts.len() > 1 {
@@ -228,11 +227,10 @@ impl Renderer {
         let margin = 256;
         let mut pts = Vec::with_capacity(run.len());
         for &r in run {
-            if let OutputGeometry::Point(p) = &self.data.geometries[self.data.objects[r as usize].geometry as usize] {
-                let (x, y) = bbox.scale_coord(ll_to_coord(*p));
-                if x >= -margin && x <= extent + margin && y >= -margin && y <= extent + margin {
-                    pts.push((x, y));
-                }
+            let p = self.data.geometries.point(self.data.objects[r as usize].geometry);
+            let (x, y) = bbox.scale_coord(ll_to_coord(p));
+            if x >= -margin && x <= extent + margin && y >= -margin && y <= extent + margin {
+                pts.push((x, y));
             }
         }
         if pts.is_empty() {
@@ -358,39 +356,64 @@ impl Renderer {
     }
 }
 
-/// Clip compact polygons to `r`: only polygons whose exterior's box meets
-/// `r` are converted, and those wholly inside are not clipped.
-fn clip_compact(cp: &CompactPolygons, r: &Rect) -> MultiPolygon {
+/// Clip a packed polygons record to `r`: polygons whose box misses `r` are
+/// skipped undecoded, and those wholly inside are not clipped.
+fn clip_packed(rec: &[u8], r: &Rect) -> MultiPolygon {
     let to_e7 = |v: f64| (v * 1e7).round() as i64;
     let (rx0, ry0, rx1, ry1) = (to_e7(r.min().x), to_e7(r.min().y), to_e7(r.max().x), to_e7(r.max().y));
+    let meets = |b: [i64; 4]| !(b[2] < rx0 || b[0] > rx1 || b[3] < ry0 || b[1] > ry1);
+    let within = |b: [i64; 4]| b[0] >= rx0 && b[2] <= rx1 && b[1] >= ry0 && b[3] <= ry1;
     let mut out = Vec::new();
-    for (rings, b) in cp.polygons().zip(cp.boxes.iter()) {
-        let ext = rings[0];
-        let (x0, y0, x1, y1) = (b[0] as i64, b[1] as i64, b[2] as i64, b[3] as i64);
-        if x1 < rx0 || x0 > rx1 || y1 < ry0 || y0 > ry1 {
-            continue;
-        }
-        let inside = x0 >= rx0 && x1 <= rx1 && y0 >= ry0 && y1 <= ry1;
-        let ring = |lls: &[tilemaker_geom::LatpLon]| -> Vec<Coord> {
-            let c = to_coords(lls);
-            if inside {
-                c
-            } else {
-                tilemaker_geom::clip::clip_ring(&c, r)
+    // Whether the polygon is wholly inside, from its stored box; `None`
+    // for a lone polygon, which has none (its exterior's is used).
+    let inside = std::cell::Cell::new(None);
+    packed::for_each_polygon(
+        rec,
+        |b| match b {
+            Some(b) => {
+                let b = b.map(|v| v as i64);
+                inside.set(Some(within(b)));
+                meets(b)
             }
-        };
-        let exterior = ring(ext);
-        if exterior.len() < 4 {
-            continue;
-        }
-        let holes = rings[1..]
-            .iter()
-            .map(|h| ring(h))
-            .filter(|h| h.len() >= 4)
-            .map(LineString::new)
-            .collect();
-        out.push(geo::Polygon::new(LineString::new(exterior), holes));
-    }
+            None => {
+                inside.set(None);
+                true
+            }
+        },
+        |rings| {
+            let inside = match inside.get() {
+                Some(i) => i,
+                None => {
+                    let b = rings[0].iter().fold([i64::MAX, i64::MAX, i64::MIN, i64::MIN], |b, p| {
+                        let (x, y) = (to_e7(p.x), to_e7(p.y));
+                        [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)]
+                    });
+                    if !meets(b) {
+                        return;
+                    }
+                    within(b)
+                }
+            };
+            let ring = |c: &Vec<Coord>| -> Vec<Coord> {
+                if inside {
+                    c.clone()
+                } else {
+                    tilemaker_geom::clip::clip_ring(c, r)
+                }
+            };
+            let exterior = ring(&rings[0]);
+            if exterior.len() < 4 {
+                return;
+            }
+            let holes = rings[1..]
+                .iter()
+                .map(ring)
+                .filter(|h| h.len() >= 4)
+                .map(LineString::new)
+                .collect();
+            out.push(geo::Polygon::new(LineString::new(exterior), holes));
+        },
+    );
     MultiPolygon::new(out)
 }
 
@@ -491,7 +514,9 @@ mod tests {
             ),
         ]);
         tilemaker_geom::valid::orient_multipolygon(&mut mp);
-        let cp = CompactPolygons::from_geo(&mp);
+        let cp = tilemaker_geom::compact::CompactPolygons::from_geo(&mp);
+        let mut rec = Vec::new();
+        packed::encode_polygons(&cp, &mut rec);
         let mut seed = 7u64;
         let mut rnd = || {
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
@@ -500,7 +525,7 @@ mod tests {
         for _ in 0..200 {
             let (a, b, d, e) = (rnd(), rnd(), rnd(), rnd());
             let r = Rect::new(c(a.min(d), b.min(e)), c(a.max(d), b.max(e)));
-            let ours = clip_compact(&cp, &r);
+            let ours = clip_packed(&rec, &r);
             let theirs = tilemaker_geom::clip::clip_multipolygon(&cp.to_geo(), &r);
             assert!((ours.unsigned_area() - theirs.unsigned_area()).abs() < 1e-9, "{r:?}");
             assert_eq!(ours.0.len(), theirs.0.len(), "{r:?}");

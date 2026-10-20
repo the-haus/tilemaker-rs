@@ -38,6 +38,8 @@ pub struct ReadStats {
     pub stored_nodes: u64,
     /// Way geometries stored for relations.
     pub stored_ways: u64,
+    /// Bytes the output geometries take.
+    pub geometry_bytes: u64,
 }
 
 fn latp_lon((lat, lon): Location) -> LatpLon {
@@ -557,6 +559,7 @@ pub(crate) fn read(
     stats.relations_processed = counters.relations.load(Ordering::Relaxed);
     stats.ways_missing_nodes = counters.missing.load(Ordering::Relaxed);
     stats.objects = data.objects.len() as u64;
+    stats.geometry_bytes = data.geometries.bytes() as u64;
     Ok((data, stats))
 }
 

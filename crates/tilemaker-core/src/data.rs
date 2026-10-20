@@ -8,7 +8,7 @@ use tilemaker_geom::compact::to_coords;
 use tilemaker_geom::coords::{latp2tileyf, lon2tilexf, TileCoord, MAX_LATP, MIN_LATP};
 use tilemaker_geom::tiles::{fill_covered_tiles, insert_intermediate_tiles};
 use tilemaker_geom::{ll_to_coord, Coord, LatpLon};
-use tilemaker_lua::{Attribute, GeometryKind, OutputGeometry, ProcessedObject};
+use tilemaker_lua::{Attribute, GeometryKind, OutputGeometry, PendingOutput, ProcessedObject};
 
 /// One `Layer()` output, ready for tiles.
 #[derive(Clone, Copy, Debug)]
@@ -38,12 +38,47 @@ pub enum Coverage {
     Rect(TileCoord, TileCoord),
 }
 
-/// A processed object with its coverage, as produced by a worker.
+/// A geometry packed for the store: a point, or the end of its record.
+#[derive(Clone, Copy, Debug)]
+pub enum Packed {
+    /// A point.
+    Point(LatpLon),
+    /// The exclusive end of its record in [`IndexedObject::records`].
+    Record(u32),
+}
+
+/// A processed object with its coverage and packed geometries, as produced
+/// by a worker.
 pub struct IndexedObject {
-    /// The profile's outputs and geometries.
-    pub object: ProcessedObject,
+    /// The object's id.
+    pub id: i64,
+    /// The profile's outputs.
+    pub outputs: Vec<PendingOutput>,
+    /// Per geometry: its kind and where it is.
+    pub geometries: Vec<(GeometryKind, Packed)>,
+    /// The geometries' records, back to back.
+    pub records: Vec<u8>,
     /// Coverage per geometry.
     pub coverage: Vec<Coverage>,
+}
+
+/// Pack an object's geometries (see [`tilemaker_geom::packed`]).
+fn pack(geometries: &[OutputGeometry]) -> (Vec<(GeometryKind, Packed)>, Vec<u8>) {
+    use tilemaker_geom::packed;
+    let mut records = Vec::new();
+    let out = geometries
+        .iter()
+        .map(|g| {
+            match g {
+                OutputGeometry::Point(p) => return (g.kind(), Packed::Point(*p)),
+                OutputGeometry::LineString(l) => packed::encode_line(l, &mut records),
+                OutputGeometry::MultiLineString(l) => packed::encode_lines(l, &mut records),
+                OutputGeometry::MultiPolygon(p) => packed::encode_polygons(p, &mut records),
+            }
+            (g.kind(), Packed::Record(records.len() as u32))
+        })
+        .collect();
+    (out, records)
 }
 
 /// Polygons covering this many base tiles or more go to the rectangle list
@@ -103,7 +138,14 @@ pub fn coverage(object: ProcessedObject, base_zoom: u8, footprint: Footprint<'_>
             _ => cover(g, base_zoom),
         })
         .collect();
-    IndexedObject { object, coverage }
+    let (geometries, records) = pack(&object.geometries);
+    IndexedObject {
+        id: object.id,
+        outputs: object.outputs,
+        geometries,
+        records,
+        coverage,
+    }
 }
 
 fn cover(g: &OutputGeometry, z: u8) -> Coverage {
@@ -167,6 +209,75 @@ fn tile_of(c: Coord, z: u8) -> TileCoord {
     )
 }
 
+/// Output geometries without an allocation each: a point is kept in its
+/// 8-byte slot, anything else as a packed record in large pages (see
+/// [`tilemaker_geom::packed`]).
+#[derive(Default)]
+pub struct GeometryStore {
+    /// Per geometry: a point's `lon << 32 | latp`, or where its record
+    /// starts (`page << 32 | offset`).
+    slots: Vec<u64>,
+    pages: Vec<Vec<u8>>,
+}
+
+/// Bytes per page (reserved; only what is written is touched).
+const PAGE: usize = 64 << 20;
+
+impl GeometryStore {
+    /// Number of geometries.
+    pub fn len(&self) -> usize {
+        self.slots.len()
+    }
+
+    fn push_point(&mut self, p: LatpLon) -> u32 {
+        self.slots.push((p.lon as u32 as u64) << 32 | p.latp as u32 as u64);
+        self.slots.len() as u32 - 1
+    }
+
+    fn push_record(&mut self, rec: &[u8]) -> u32 {
+        if self.pages.last().is_none_or(|p| p.len() + rec.len() > p.capacity()) {
+            if let Some(p) = self.pages.last_mut() {
+                p.shrink_to_fit();
+            }
+            self.pages.push(Vec::with_capacity(PAGE.max(rec.len())));
+        }
+        let page = self.pages.len() - 1;
+        let p = &mut self.pages[page];
+        self.slots.push((page as u64) << 32 | p.len() as u64);
+        p.extend_from_slice(rec);
+        self.slots.len() as u32 - 1
+    }
+
+    /// Geometry `i`, a point.
+    #[inline]
+    pub fn point(&self, i: u32) -> LatpLon {
+        let s = self.slots[i as usize];
+        LatpLon {
+            lon: (s >> 32) as u32 as i32,
+            latp: s as u32 as i32,
+        }
+    }
+
+    /// Geometry `i`'s record (and whatever follows it).
+    #[inline]
+    pub fn record(&self, i: u32) -> &[u8] {
+        let s = self.slots[i as usize];
+        &self.pages[(s >> 32) as usize][(s as u32) as usize..]
+    }
+
+    /// Heap bytes in use.
+    pub fn bytes(&self) -> usize {
+        self.slots.capacity() * 8 + self.pages.iter().map(|p| p.len()).sum::<usize>()
+    }
+
+    fn shrink(&mut self) {
+        self.slots.shrink_to_fit();
+        if let Some(p) = self.pages.last_mut() {
+            p.shrink_to_fit();
+        }
+    }
+}
+
 /// The tile data.
 #[derive(Default)]
 pub struct TileData {
@@ -175,7 +286,7 @@ pub struct TileData {
     /// Output objects.
     pub objects: Vec<OutputObject>,
     /// Geometries.
-    pub geometries: Vec<OutputGeometry>,
+    pub geometries: GeometryStore,
     /// Distinct attribute sets (sorted by key).
     pub attribute_sets: Vec<Arc<[Attribute]>>,
     attribute_index: HashMap<Arc<[Attribute]>, u32>,
@@ -208,14 +319,25 @@ impl TileData {
 
     /// Add one indexed object.
     pub fn add(&mut self, o: IndexedObject) {
-        let IndexedObject { object, coverage } = o;
-        let base = self.geometries.len() as u32;
-        let ProcessedObject {
+        let IndexedObject {
             id,
-            geometries,
             outputs,
-        } = object;
-        self.geometries.extend(geometries);
+            geometries,
+            records,
+            coverage,
+        } = o;
+        let base = self.geometries.len() as u32;
+        let mut start = 0usize;
+        for &(_, g) in &geometries {
+            match g {
+                Packed::Point(p) => self.geometries.push_point(p),
+                Packed::Record(end) => {
+                    let i = self.geometries.push_record(&records[start..end as usize]);
+                    start = end as usize;
+                    i
+                }
+            };
+        }
         for out in outputs {
             if out.layer == u8::MAX {
                 continue;
@@ -225,7 +347,7 @@ impl TileData {
             let obj = self.objects.len() as u32;
             self.objects.push(OutputObject {
                 layer: out.layer,
-                kind: self.geometries[geometry as usize].kind(),
+                kind: geometries[out.geometry].0,
                 min_zoom: out.min_zoom,
                 z_order: out.z_order,
                 attributes,
@@ -247,7 +369,7 @@ impl TileData {
     pub fn seal(&mut self) {
         self.attribute_index = HashMap::new();
         self.objects.shrink_to_fit();
-        self.geometries.shrink_to_fit();
+        self.geometries.shrink();
         for v in self.tiles.values_mut() {
             v.shrink_to_fit();
         }

@@ -174,6 +174,8 @@ export interface TileStats {
     objects: number;
     storedNodes: number;
     storedWays: number;
+    /** Bytes the output geometries take in memory. */
+    geometryBytes: number;
   };
   tiles: number;
   /** Tiles per zoom (index = zoom). */
