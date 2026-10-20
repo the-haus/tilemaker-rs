@@ -129,7 +129,7 @@ export interface RelationElement {
 export type Element = NodeElement | WayElement | RelationElement;
 
 /** A pass over the file (see the README's "How it works"). */
-export type Phase = "scanRelations" | "scanWays" | "nodes" | "ways" | "relations" | "elements";
+export type Phase = "scanRelations" | "scanWays" | "nodes" | "ways" | "relations" | "elements" | "write";
 
 export interface Progress {
   phase: Phase;
@@ -139,7 +139,7 @@ export interface Progress {
 
 /** Progress of tile generation: reading passes, then tiles zoom by zoom. */
 export type TileProgress =
-  | { phase: Exclude<Phase, "elements">; blocksDone: number; blocksTotal: number }
+  | { phase: Exclude<Phase, "elements" | "write">; blocksDone: number; blocksTotal: number }
   | { phase: "tiles"; zoom: number; tilesDone: number; tilesTotal: number };
 
 /** A vector tile. */
@@ -315,6 +315,49 @@ export interface FileInfoOptions {
   onProgress?: (progress: Progress) => void;
   /** Abort the read. */
   signal?: AbortSignal;
+}
+
+/** Options for {@link extract}. */
+export interface ExtractOptions {
+  /** The output `.osm.pbf` (replaced if it exists). */
+  output: string | URL;
+  /**
+   * osmium `tags-filter` expressions: keep matching elements, the nodes of
+   * matching ways and the members of matching relations (recursively).
+   * Default: every element of the region.
+   */
+  filters?: string[];
+  /** Region: `[west, south, east, north]`. */
+  bbox?: [number, number, number, number];
+  /**
+   * Region: a GeoJSON `Polygon`/`MultiPolygon` (or a `Feature` or
+   * `FeatureCollection` of them), or the path of a `.geojson` or osmosis
+   * `.poly` file.
+   */
+  polygon?: string | URL | Record<string, unknown>;
+  /** Keep only matching elements, not the nodes and members they reference (`osmium tags-filter -R`). */
+  omitReferenced?: boolean;
+  /** Keep metadata (version, timestamp, changeset, uid, user). Default true. */
+  metadata?: boolean;
+  /** Threads (default: all cores). */
+  threads?: number;
+  /** Called with progress, at most every 200 ms and at phase changes. */
+  onProgress?: (progress: Progress) => void;
+  /** Abort the extract (the output is then incomplete). */
+  signal?: AbortSignal;
+}
+
+/** Counters from {@link extract}. */
+export interface ExtractStats {
+  nodes: number;
+  ways: number;
+  relations: number;
+  /** Data blocks written. */
+  blocks: number;
+  /** Bytes written. */
+  bytes: number;
+  stopped: boolean;
+  elapsedMs: number;
 }
 
 /** Options shared by {@link PbfReader.features} and {@link PbfReader.elements}. */

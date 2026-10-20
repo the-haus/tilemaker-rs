@@ -168,6 +168,8 @@ pub enum Phase {
     Relations,
     /// Reading everything in one pass (element export without locations).
     Elements,
+    /// Writing an extract.
+    Write,
 }
 
 impl Phase {
@@ -180,6 +182,7 @@ impl Phase {
             Phase::Ways => "ways",
             Phase::Relations => "relations",
             Phase::Elements => "elements",
+            Phase::Write => "write",
         }
     }
 }
@@ -263,7 +266,7 @@ impl Counters {
     }
 }
 
-fn threads(n: usize) -> usize {
+pub(crate) fn threads(n: usize) -> usize {
     if n == 0 {
         tilemaker_pbf::parallel::default_threads()
     } else {
@@ -419,6 +422,7 @@ pub trait Weight {
 
 impl Weight for Feature {}
 impl Weight for Element {}
+impl Weight for () {}
 
 /// What a pass does with one block.
 type BlockFn<T> = dyn Fn(usize, &PrimitiveBlock) -> Result<Vec<T>, ExportError> + Send + Sync;
@@ -929,12 +933,12 @@ fn only(kind: ElementType) -> DecodeOptions {
     }
 }
 
-struct Runner<'a> {
-    file: &'a PbfFile,
-    threads: usize,
-    layout: Layout,
-    stopped: bool,
-    emitted: u64,
+pub(crate) struct Runner<'a> {
+    pub(crate) file: &'a PbfFile,
+    pub(crate) threads: usize,
+    pub(crate) layout: Layout,
+    pub(crate) stopped: bool,
+    pub(crate) emitted: u64,
 }
 
 /// Work units of the relations pass hold relations until they have this
@@ -1029,7 +1033,7 @@ impl Runner<'_> {
             Phase::ScanRelations | Phase::Relations => self.layout.relations.clone(),
             Phase::ScanWays | Phase::Ways => self.layout.ways.clone(),
             Phase::Nodes => self.layout.nodes.clone(),
-            Phase::Elements => self.layout.nodes.start..self.layout.relations.end,
+            Phase::Elements | Phase::Write => self.layout.nodes.start..self.layout.relations.end,
         };
         range.collect()
     }
@@ -1053,7 +1057,7 @@ impl Runner<'_> {
             .blocks_with_ids(range, kind, self.threads, |lo, hi| ids.any_in_range(lo, hi))?)
     }
 
-    fn pass<T: Weight + Send + 'static>(
+    pub(crate) fn pass<T: Weight + Send + 'static>(
         &mut self,
         phase: Phase,
         opts: DecodeOptions,

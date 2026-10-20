@@ -31,6 +31,9 @@ struct Cli {
 enum Command {
     /// Stream filtered, assembled features as newline-delimited GeoJSON.
     Export(Box<ExportArgs>),
+    /// Write an extract as PBF: osmium tags-filter and/or osmium extract
+    /// (complete_ways) in one run.
+    Extract(Box<ExtractArgs>),
     /// Show what a PBF file holds: header, and with -e counts, ids,
     /// bounding box, timestamps (like osmium fileinfo).
     Fileinfo {
@@ -166,6 +169,36 @@ struct ExportArgs {
     record_separator: bool,
 }
 
+#[derive(Args)]
+struct ExtractArgs {
+    /// Source .osm.pbf file.
+    input: PathBuf,
+    /// Output .osm.pbf file.
+    #[arg(short, long)]
+    output: PathBuf,
+    /// osmium-style tag filter (repeatable); none: keep everything in the region.
+    #[arg(short, long = "filter")]
+    filters: Vec<String>,
+    /// Region: minlon,minlat,maxlon,maxlat.
+    #[arg(short, long, value_parser = parse_bbox, conflicts_with = "polygon")]
+    bbox: Option<[f64; 4]>,
+    /// Region: a GeoJSON (Multi)Polygon / Feature(Collection) or an osmosis .poly file.
+    #[arg(short, long)]
+    polygon: Option<PathBuf>,
+    /// Keep only matching elements, not the nodes and members they reference.
+    #[arg(short = 'R', long)]
+    omit_referenced: bool,
+    /// Drop metadata (version, timestamp, changeset, uid, user).
+    #[arg(long)]
+    no_metadata: bool,
+    /// Replace the output if it exists.
+    #[arg(long)]
+    overwrite: bool,
+    /// Number of threads (0: all cores).
+    #[arg(long, default_value_t = 0)]
+    threads: usize,
+}
+
 fn parse_bbox(s: &str) -> Result<[f64; 4], String> {
     let v: Vec<f64> = s
         .split(',')
@@ -188,6 +221,7 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Command::Export(a)) => export(*a),
+        Some(Command::Extract(a)) => extract(*a),
         Some(Command::Fileinfo {
             path,
             extended,
@@ -368,6 +402,41 @@ fn export(a: ExportArgs) -> Result<()> {
         Err(ExportError::Io(e)) if e.kind() == std::io::ErrorKind::BrokenPipe => return Ok(()),
         r => r?,
     };
+    eprintln!("{}", serde_json::to_string(&stats)?);
+    Ok(())
+}
+
+fn extract(a: ExtractArgs) -> Result<()> {
+    use tilemaker_export::{ExtractOptions, FilterSet, Region};
+    let file = PbfFile::open(&a.input).with_context(|| format!("opening {}", a.input.display()))?;
+    let region = match (&a.bbox, &a.polygon) {
+        (Some(b), _) => Some(Region::Bbox(*b)),
+        (None, Some(p)) => {
+            let text = std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?;
+            Some(if p.extension().is_some_and(|e| e == "poly") {
+                Region::from_poly(&text)?
+            } else {
+                Region::from_geojson(&serde_json::from_str(&text)?)?
+            })
+        }
+        (None, None) => None,
+    };
+    let opts = ExtractOptions {
+        filters: (!a.filters.is_empty())
+            .then(|| FilterSet::parse(&a.filters))
+            .transpose()?,
+        region,
+        omit_referenced: a.omit_referenced,
+        metadata: !a.no_metadata,
+        threads: a.threads,
+        writing_program: None,
+    };
+    if a.output.exists() && !a.overwrite {
+        bail!("{} exists (use --overwrite to replace it)", a.output.display());
+    }
+    let out = std::fs::File::create(&a.output).with_context(|| format!("creating {}", a.output.display()))?;
+    let out = BufWriter::with_capacity(1 << 20, out);
+    let (_, stats) = tilemaker_export::extract(&file, &opts, out, |_| tilemaker_export::Flow::Continue)?;
     eprintln!("{}", serde_json::to_string(&stats)?);
     Ok(())
 }

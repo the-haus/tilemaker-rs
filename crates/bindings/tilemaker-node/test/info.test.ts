@@ -3,17 +3,7 @@ import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 import { fileInfo, openPbf } from "../ts/index.js";
-import { extract, fixture } from "./helpers.js";
-
-/** Whether osmium-tool is installed (parity checks need it). */
-export const hasOsmium = (() => {
-  try {
-    execFileSync("osmium", ["--version"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
+import { extract, fixture, hasOsmium } from "./helpers.js";
 
 describe("fileInfo", () => {
   it("reads the header and blocks without decoding", async () => {

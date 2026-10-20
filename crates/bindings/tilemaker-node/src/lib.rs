@@ -51,6 +51,27 @@ pub struct PbfHeader {
     pub locations_on_ways: bool,
 }
 
+/// Options for `extract()`.
+#[napi(object)]
+pub struct NativeExtractOptions {
+    /// The output path.
+    pub output: String,
+    /// osmium tags-filter expressions.
+    pub filters: Option<Vec<String>>,
+    /// Region: `[west, south, east, north]`.
+    pub bbox: Option<Vec<f64>>,
+    /// Region: GeoJSON text.
+    pub polygon_json: Option<String>,
+    /// Region: a `.geojson` or `.poly` file.
+    pub polygon_file: Option<String>,
+    /// Omit referenced nodes and members.
+    pub omit_referenced: Option<bool>,
+    /// Keep metadata (default true).
+    pub metadata: Option<bool>,
+    /// Worker threads.
+    pub threads: Option<u32>,
+}
+
 /// Options for `fileInfo()`.
 #[napi(object)]
 pub struct FileInfoOptions {
@@ -157,6 +178,57 @@ impl NativeReader {
             )
             .map_err(|e| e.to_string())?;
             Ok(info.to_json())
+        }))
+    }
+
+    /// Write an extract as PBF (osmium tags-filter and/or extract).
+    #[napi(ts_args_type = "options: NativeExtractOptions, callback: (event: unknown) => void")]
+    pub fn extract(&self, options: NativeExtractOptions, callback: JsFunction) -> Result<NativeStream> {
+        use tilemaker_export::{ExtractOptions, FilterSet, Region};
+        let region = match (&options.bbox, &options.polygon_json, &options.polygon_file) {
+            (Some(b), _, _) => {
+                if b.len() != 4 || !b.iter().all(|v| v.is_finite()) || b[0] > b[2] || b[1] > b[3] {
+                    return Err(invalid("bbox must be [west, south, east, north]"));
+                }
+                Some(Region::Bbox([b[0], b[1], b[2], b[3]]))
+            }
+            (None, Some(json), _) => {
+                let v: serde_json::Value = serde_json::from_str(json).map_err(|e| invalid(e.to_string()))?;
+                Some(Region::from_geojson(&v).map_err(|e| invalid(e.to_string()))?)
+            }
+            (None, None, Some(path)) => {
+                let text = std::fs::read_to_string(path).map_err(|e| invalid(format!("{path}: {e}")))?;
+                let r = if path.ends_with(".poly") {
+                    Region::from_poly(&text)
+                } else {
+                    serde_json::from_str(&text)
+                        .map_err(|e| tilemaker_export::ExportError::Invalid(e.to_string()))
+                        .and_then(|v| Region::from_geojson(&v))
+                };
+                Some(r.map_err(|e| invalid(format!("{path}: {e}")))?)
+            }
+            (None, None, None) => None,
+        };
+        let filters = match &options.filters {
+            Some(f) if !f.is_empty() => Some(FilterSet::parse(f).map_err(|e| invalid(e.to_string()))?),
+            _ => None,
+        };
+        let opts = ExtractOptions {
+            filters,
+            region,
+            omit_referenced: options.omit_referenced.unwrap_or(false),
+            metadata: options.metadata.unwrap_or(true),
+            threads: options.threads.unwrap_or(0) as usize,
+            writing_program: None,
+        };
+        let output = options.output;
+        let cb = stream::callback(&callback)?;
+        let file = self.file.clone();
+        Ok(stream::spawn_task(cb, move |progress| {
+            let f = std::fs::File::create(&output).map_err(|e| format!("{output}: {e}"))?;
+            let out = std::io::BufWriter::with_capacity(1 << 20, f);
+            let (_, stats) = tilemaker_export::extract(&file, &opts, out, progress).map_err(|e| e.to_string())?;
+            serde_json::to_value(&stats).map_err(|e| e.to_string())
         }))
     }
 

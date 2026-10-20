@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,3 +18,13 @@ export function signedArea(c: Float64Array, start = 0, end = c.length / 2): numb
   for (let i = start; i < end - 1; i++) s += c[2 * i]! * c[2 * i + 3]! - c[2 * i + 2]! * c[2 * i + 1]!;
   return s / 2;
 }
+
+/** Whether osmium-tool is installed (parity checks need it). */
+export const hasOsmium = (() => {
+  try {
+    execFileSync("osmium", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();

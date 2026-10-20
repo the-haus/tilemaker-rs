@@ -161,6 +161,18 @@ export interface NativeReader {
   writeTiles(options: NativeTileOptions, callback: (event: NativeEvent) => void): NativeStream;
   writeGeoJSONSeq(options: NativeStreamOptions, callback: (event: NativeEvent) => void): NativeStream;
   fileInfo(options: { extended?: boolean; threads?: number }, callback: (event: NativeEvent) => void): NativeStream;
+  extract(options: NativeExtractOptions, callback: (event: NativeEvent) => void): NativeStream;
+}
+
+export interface NativeExtractOptions {
+  output: string;
+  filters?: string[];
+  bbox?: number[];
+  polygonJson?: string;
+  polygonFile?: string;
+  omitReferenced?: boolean;
+  metadata?: boolean;
+  threads?: number;
 }
 
 export function open(path: string): Promise<NativeReader>;

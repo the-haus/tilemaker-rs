@@ -24,13 +24,21 @@ import { fileURLToPath } from "node:url";
 
 import { decodeElements, decodeFeatures, decodeTiles } from "./decode.js";
 import * as native from "./native.js";
-import type { NativeReader, NativeStream, NativeStreamOptions, NativeTileOptions } from "./native.js";
+import type {
+  NativeExtractOptions,
+  NativeReader,
+  NativeStream,
+  NativeStreamOptions,
+  NativeTileOptions,
+} from "./native.js";
 import { OsmStream } from "./stream.js";
 import {
   OsmStreamError,
   type CommonOptions,
   type Element,
   type ElementOptions,
+  type ExtractOptions,
+  type ExtractStats,
   type Feature,
   type FileInfo,
   type FileInfoOptions,
@@ -225,6 +233,11 @@ export class PbfReader {
    */
   writeGeoJSONSeq(options: WriteGeoJSONSeqOptions): Promise<ExportStats> {
     return writeGeoJSONSeqWith(async () => this.#native, options);
+  }
+
+  /** Write an extract as PBF (see {@link extract}). */
+  extract(options: ExtractOptions): Promise<ExtractStats> {
+    return extractWith(async () => this.#native, options);
   }
 
   /** What the file holds (see {@link fileInfo}). */
@@ -423,6 +436,54 @@ async function writeGeoJSONSeqWith(
  */
 export function writeGeoJSONSeq(input: string | URL, options: WriteGeoJSONSeqOptions): Promise<ExportStats> {
   return writeGeoJSONSeqWith(() => openNative(input), options);
+}
+
+async function extractWith(reader: () => Promise<NativeReader>, options: ExtractOptions): Promise<ExtractStats> {
+  const opts: NativeExtractOptions = { output: toPath(options.output) };
+  if (options.filters !== undefined) opts.filters = [...options.filters];
+  if (options.bbox !== undefined) opts.bbox = [...options.bbox];
+  if (options.polygon !== undefined) {
+    const p = options.polygon;
+    if (typeof p === "string" || p instanceof URL) opts.polygonFile = toPath(p);
+    else opts.polygonJson = JSON.stringify(p);
+  }
+  if (options.omitReferenced !== undefined) opts.omitReferenced = options.omitReferenced;
+  if (options.metadata !== undefined) opts.metadata = options.metadata;
+  if (options.threads !== undefined) opts.threads = options.threads;
+  const stream = new OsmStream<never, ExtractStats>(
+    async (cb) => (await reader()).extract(opts, cb),
+    () => [],
+    options.onProgress,
+    options.signal,
+  );
+  for await (const _ of stream) {
+    void _;
+  }
+  return stream.stats;
+}
+
+/**
+ * Write an extract of `input` as a PBF file, as `osmium extract` and
+ * `osmium tags-filter` make them, in one run on all cores:
+ *
+ * - a region (`bbox` or `polygon`) keeps the nodes inside, the ways with a
+ *   node inside (with all their nodes), the relations with such a member,
+ *   and their parent relations (osmium's `complete_ways` strategy);
+ * - `filters` then keep the matching elements with the nodes and members
+ *   they reference (recursively), unless `omitReferenced`.
+ *
+ * Tags and metadata are kept; the output is sorted when the input is, and
+ * is identical to osmium's.
+ *
+ * ```ts
+ * await extract("planet.osm.pbf", {
+ *   output: "geography.osm.pbf",
+ *   filters: ["n/place=city,town", "r/admin_level=2,4"],
+ * });
+ * ```
+ */
+export function extract(input: string | URL, options: ExtractOptions): Promise<ExtractStats> {
+  return extractWith(() => openNative(input), options);
 }
 
 async function fileInfoWith(reader: () => Promise<NativeReader>, options: FileInfoOptions): Promise<FileInfo> {
