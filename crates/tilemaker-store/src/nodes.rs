@@ -109,6 +109,31 @@ impl Chunk {
         None
     }
 
+    /// Decode group `g` into `ids`/`locs`; the number of nodes.
+    fn decode_group(&self, g: usize, ids: &mut [i64; GROUP], locs: &mut [Location; GROUP]) -> usize {
+        let n = (self.len - g * GROUP).min(GROUP);
+        let mut pos = self.group_offsets[g] as usize;
+        let (mut cur, mut lat, mut lon) = (
+            self.group_ids[g],
+            self.group_locs[g].0 as i64,
+            self.group_locs[g].1 as i64,
+        );
+        ids[0] = cur;
+        locs[0] = self.group_locs[g];
+        for i in 1..n {
+            let (d, k) = get_varint(&self.deltas[pos..]);
+            let (dlat, k2) = get_varint(&self.deltas[pos + k..]);
+            let (dlon, k3) = get_varint(&self.deltas[pos + k + k2..]);
+            pos += k + k2 + k3;
+            cur += d as i64;
+            lat += unzz(dlat);
+            lon += unzz(dlon);
+            ids[i] = cur;
+            locs[i] = (lat as i32, lon as i32);
+        }
+        n
+    }
+
     fn entries(&self) -> impl Iterator<Item = (i64, Location)> + '_ {
         (0..self.group_ids.len()).flat_map(move |g| {
             let n = (self.len - g * GROUP).min(GROUP);
@@ -393,6 +418,19 @@ impl NodeStore {
         }
     }
 
+    /// A cursor for many lookups: it keeps the last group it decoded, so
+    /// runs of nearby ids (a way's nodes usually are) decode it once.
+    pub fn cursor(&self) -> Cursor<'_> {
+        Cursor {
+            store: self,
+            chunk: usize::MAX,
+            group: usize::MAX,
+            n: 0,
+            ids: [0; GROUP],
+            locs: [(0, 0); GROUP],
+        }
+    }
+
     /// Number of nodes held (for a dense file: locations written).
     pub fn len(&self) -> usize {
         match &self.kind {
@@ -415,6 +453,53 @@ impl NodeStore {
     }
 }
 
+/// Lookups with the last decoded group cached (see [`NodeStore::cursor`]).
+pub struct Cursor<'a> {
+    store: &'a NodeStore,
+    chunk: usize,
+    group: usize,
+    n: usize,
+    ids: [i64; GROUP],
+    locs: [Location; GROUP],
+}
+
+impl Cursor<'_> {
+    /// The location of node `id`.
+    #[inline]
+    pub fn get(&mut self, id: i64) -> Option<Location> {
+        let StoreKind::Memory { chunks, starts } = &self.store.kind else {
+            return self.store.get(id);
+        };
+        if self.group != usize::MAX && id >= self.ids[0] && id <= self.ids[self.n - 1] {
+            return self.ids[..self.n].iter().position(|&x| x == id).map(|i| self.locs[i]);
+        }
+        let in_chunk = |c: usize| c < chunks.len() && id >= chunks[c].first_id && id <= chunks[c].last_id;
+        if !in_chunk(self.chunk) {
+            let c = match starts.binary_search(&id) {
+                Ok(c) => c,
+                Err(0) => return None,
+                Err(c) => c - 1,
+            };
+            if !in_chunk(c) {
+                return None;
+            }
+            self.chunk = c;
+            self.group = usize::MAX;
+        }
+        let chunk = &chunks[self.chunk];
+        let g = match chunk.group_ids.binary_search(&id) {
+            Ok(g) => g,
+            Err(0) => return None,
+            Err(g) => g - 1,
+        };
+        if g != self.group {
+            self.n = chunk.decode_group(g, &mut self.ids, &mut self.locs);
+            self.group = g;
+        }
+        self.ids[..self.n].iter().position(|&x| x == id).map(|i| self.locs[i])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,6 +516,13 @@ mod tests {
     }
 
     fn check(store: &NodeStore, ids: &[i64]) {
+        let mut cursor = store.cursor();
+        for &id in ids.iter().chain(ids.iter().rev()) {
+            assert_eq!(cursor.get(id), store.get(id), "{id}");
+        }
+        for id in [0, 2, -1, i64::MAX] {
+            assert_eq!(cursor.get(id), store.get(id), "{id}");
+        }
         for &id in ids {
             assert_eq!(
                 store.get(id),

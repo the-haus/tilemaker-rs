@@ -17,7 +17,7 @@ mod ways;
 
 pub use ids::{IdSet, IdSetBuilder};
 pub use nodes::Location;
-pub use nodes::{NodeStore, NodeStoreBuilder};
+pub use nodes::{Cursor, NodeStore, NodeStoreBuilder};
 pub use refs::{RefBatch, RefStore, RefStoreBuilder};
 pub use ways::{WayBatch, WayStore, WayStoreBuilder};
 

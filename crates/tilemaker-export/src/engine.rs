@@ -24,7 +24,7 @@ use tilemaker_geom::assemble::{assemble_area, merge_ways};
 use tilemaker_geom::LatpLon;
 use tilemaker_pbf::{DecodeOptions, ElementType, Layout, PbfFile, PrimitiveBlock, Relation, Tags, Way};
 use tilemaker_store::{
-    IdSet, IdSetBuilder, Location, NodeStore, NodeStoreBuilder, RefBatch, RefStore, RefStoreBuilder, WayBatch,
+    Cursor, IdSet, IdSetBuilder, Location, NodeStore, NodeStoreBuilder, RefBatch, RefStore, RefStoreBuilder, WayBatch,
     WayStore, WayStoreBuilder,
 };
 
@@ -537,6 +537,7 @@ pub fn export_features(
             move |_, b| {
                 let needed_ways = s.needed_ways.read().unwrap();
                 let store = s.node_store.read().unwrap();
+                let mut nodes = store.as_ref().map(|ns| ns.cursor());
                 let mut out = Vec::new();
                 let mut batch = WayBatch::new();
                 let mut locs: Vec<Location> = Vec::new();
@@ -547,7 +548,7 @@ pub fn export_features(
                     if outputs.is_none() && !needed {
                         continue;
                     }
-                    if !resolve_way(&w, store.as_ref(), &mut locs) {
+                    if !resolve_way(&w, nodes.as_mut(), &mut locs) {
                         s.counters.add(&s.counters.ways_missing_nodes, 1);
                         continue;
                     }
@@ -627,10 +628,11 @@ pub fn export_features(
             let mut out = Vec::new();
             let mut buf = Vec::new();
             let mut ids = Vec::new();
+            let mut nodes = node_store.as_ref().map(|ns| ns.cursor());
             // A member way's locations, from the way store or from its node
             // ids and the node store; `false` when unknown.
             let mut way = |id: i64, buf: &mut Vec<Location>| -> bool {
-                match (ref_store.as_ref(), node_store.as_ref()) {
+                match (ref_store.as_ref(), nodes.as_mut()) {
                     (Some(rs), Some(ns)) => {
                         buf.clear();
                         rs.get_into(id, &mut ids) && ids.iter().all(|&n| ns.get(n).map(|l| buf.push(l)).is_some())
@@ -766,7 +768,7 @@ fn freeze_ways(shared: &Shared, stats: &mut ExportStats) {
 
 /// A way's locations from the node store (or the way itself); `false` when
 /// a node is missing.
-fn resolve_way(w: &Way<'_>, store: Option<&NodeStore>, out: &mut Vec<Location>) -> bool {
+fn resolve_way(w: &Way<'_>, store: Option<&mut Cursor<'_>>, out: &mut Vec<Location>) -> bool {
     out.clear();
     let l = w.locations();
     if !l.is_empty() {
