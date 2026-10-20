@@ -2,7 +2,13 @@
 
 use std::io::Read;
 
+use std::cell::RefCell;
+
 use crate::proto::{Reader, LEN};
+
+thread_local! {
+    static LIBDEFLATE: RefCell<libdeflater::Decompressor> = RefCell::new(libdeflater::Decompressor::new());
+}
 use crate::Error;
 
 /// Largest permitted blob header (per the format spec).
@@ -77,21 +83,41 @@ pub fn decompress_blob(buf: &[u8], out: &mut Vec<u8>) -> Result<(), Error> {
     };
     match field {
         1 => out.extend_from_slice(data),
-        3 => {
-            let size = raw_size.unwrap_or(data.len() * 4).min(MAX_BLOB_SIZE);
-            out.reserve(size);
-            flate2::read::ZlibDecoder::new(data)
-                .take(MAX_BLOB_SIZE as u64 + 1)
-                .read_to_end(out)
-                .map_err(|e| Error::Decompress(e.to_string()))?;
-            if out.len() > MAX_BLOB_SIZE {
-                return Err(Error::Corrupt("decompressed blob larger than 32 MiB"));
+        3 => match raw_size {
+            // libdeflate inflates a whole buffer of known size ~2× faster
+            // than a streaming inflater.
+            Some(size) if size <= MAX_BLOB_SIZE => {
+                out.resize(size, 0);
+                let n = LIBDEFLATE.with(|d| d.borrow_mut().zlib_decompress(data, out));
+                match n {
+                    Ok(n) if n == size => {}
+                    Ok(_) => return Err(Error::Corrupt("decompressed size differs from raw_size")),
+                    Err(e) => return Err(Error::Decompress(format!("{e:?}"))),
+                }
             }
-        }
+            _ => {
+                flate2::read::ZlibDecoder::new(data)
+                    .take(MAX_BLOB_SIZE as u64 + 1)
+                    .read_to_end(out)
+                    .map_err(|e| Error::Decompress(e.to_string()))?;
+                if out.len() > MAX_BLOB_SIZE {
+                    return Err(Error::Corrupt("decompressed blob larger than 32 MiB"));
+                }
+            }
+        },
         4 => return Err(Error::Unsupported("lzma-compressed blobs".into())),
         5 => return Err(Error::Unsupported("bzip2-compressed blobs".into())),
-        6 => return Err(Error::Unsupported("lz4-compressed blobs".into())),
-        7 => return Err(Error::Unsupported("zstd-compressed blobs".into())),
+        6 => {
+            let size = raw_size.ok_or(Error::Corrupt("lz4 blob without raw_size"))?;
+            if size > MAX_BLOB_SIZE {
+                return Err(Error::Corrupt("decompressed blob larger than 32 MiB"));
+            }
+            *out = lz4_flex::block::decompress(data, size).map_err(|e| Error::Decompress(e.to_string()))?;
+        }
+        7 => {
+            let size = raw_size.unwrap_or(MAX_BLOB_SIZE).min(MAX_BLOB_SIZE);
+            *out = zstd::bulk::decompress(data, size).map_err(|e| Error::Decompress(e.to_string()))?;
+        }
         _ => unreachable!(),
     }
     if let Some(n) = raw_size {

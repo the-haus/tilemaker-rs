@@ -12,5 +12,12 @@ categories = ["parser-implementations", "science::geo"]
 
 [dependencies]
 flate2.workspace = true
+libdeflater.workspace = true
+zstd.workspace = true
+lz4_flex.workspace = true
 thiserror.workspace = true
 crossbeam-channel.workspace = true
+
+[dev-dependencies]
+zstd.workspace = true
+lz4_flex.workspace = true

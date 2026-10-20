@@ -400,3 +400,63 @@ fn empty_blocks_do_not_break_the_layout() {
         .sum();
     assert_eq!(nodes, 40_000, "{layout:?}");
 }
+
+/// Re-frame every data blob of an uncompressed file with another codec:
+/// field 7 (zstd) or 6 (lz4), with raw_size.
+fn recompress(bytes: &[u8], field: u8, compress: impl Fn(&[u8]) -> Vec<u8>) -> Vec<u8> {
+    fn varint(out: &mut Vec<u8>, mut v: u64) {
+        while v >= 0x80 {
+            out.push((v as u8) | 0x80);
+            v >>= 7;
+        }
+        out.push(v as u8);
+    }
+    let mut out = Vec::new();
+    for b in BlobReader::new(Cursor::new(bytes)) {
+        let (info, body) = b.unwrap();
+        let mut raw = Vec::new();
+        decompress_blob(&body, &mut raw).unwrap();
+        let kind = if info.kind == BlobKind::Header {
+            "OSMHeader"
+        } else {
+            "OSMData"
+        };
+        let packed = compress(&raw);
+        let mut blob = vec![0x10];
+        varint(&mut blob, raw.len() as u64);
+        blob.push((field << 3) | 2);
+        varint(&mut blob, packed.len() as u64);
+        blob.extend_from_slice(&packed);
+        let mut header = vec![0x0a];
+        varint(&mut header, kind.len() as u64);
+        header.extend_from_slice(kind.as_bytes());
+        header.push(0x18);
+        varint(&mut header, blob.len() as u64);
+        out.extend_from_slice(&(header.len() as u32).to_be_bytes());
+        out.extend(header);
+        out.extend(blob);
+    }
+    out
+}
+
+#[test]
+fn zstd_and_lz4_blobs() {
+    let plain = write_sample(WriterOptions::default(), 5_000);
+    let count = |bytes: &[u8]| -> usize {
+        let path = temp_path(&format!("codec-{}.osm.pbf", bytes.len()));
+        std::fs::write(&path, bytes).unwrap();
+        let f = PbfFile::open(&path).unwrap();
+        f.blocks(0..f.blobs().len(), DecodeOptions::ALL, 2)
+            .map(|b| {
+                let (_, b) = b.unwrap();
+                b.node_count() + b.way_count() + b.relation_count()
+            })
+            .sum()
+    };
+    let want = count(&plain);
+    assert_eq!(want, 5_000 + 500 + 1);
+    let z = recompress(&plain, 7, |d| zstd::bulk::compress(d, 3).unwrap());
+    assert_eq!(count(&z), want);
+    let l = recompress(&plain, 6, lz4_flex::block::compress);
+    assert_eq!(count(&l), want);
+}
