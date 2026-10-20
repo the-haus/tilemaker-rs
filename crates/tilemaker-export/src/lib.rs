@@ -21,7 +21,7 @@ pub use engine::{
     export_elements, export_elements_from_reader, export_features, CommonOptions, ElementOptions, Event, ExportStats,
     FeatureOptions, Flow, GeometryTypes, NodeStorage, Phase, Progress,
 };
-pub use filter::{FilterParseError, FilterSet, TagFilter};
+pub use filter::{BlockFilter, FilterParseError, FilterSet, TagFilter};
 pub use record::{Element, Feature, Geometry, GeometryType, MemberRecord, Meta, TagSelection};
 pub use tilemaker_pbf::{ElementType, PbfFile};
 

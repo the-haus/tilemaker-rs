@@ -29,7 +29,7 @@ use tilemaker_store::{
 };
 
 use crate::area::ClosedWays;
-use crate::filter::FilterSet;
+use crate::filter::{BlockFilter, FilterSet};
 use crate::record::{Element, Feature, Geometry, GeometryType, MemberRecord, Meta, TagSelection};
 use crate::ExportError;
 
@@ -310,7 +310,7 @@ impl Shared {
     }
 
     /// (polygon, line) outputs for a selected way, if it is selected.
-    fn way_outputs(&self, w: &Way<'_>) -> Option<(bool, bool)> {
+    fn way_outputs(&self, w: &Way<'_>, f: &BlockFilter<'_>) -> Option<(bool, bool)> {
         let closed = Self::way_is_closed(w);
         let tags = w.tags();
         let (poly, line) = if closed {
@@ -323,13 +323,12 @@ impl Shared {
         if !poly && !line {
             return None;
         }
-        self.filters
-            .matches(ElementType::Way, closed && poly, &tags)
+        f.matches(ElementType::Way, closed && poly, &tags)
             .then_some((poly, line))
     }
 
     /// Whether a relation is selected, and whether it is an area.
-    fn relation_selected(&self, r: &Relation<'_>) -> Option<bool> {
+    fn relation_selected(&self, r: &Relation<'_>, f: &BlockFilter<'_>) -> Option<bool> {
         let tags = r.tags();
         let area = is_area_relation(&tags);
         let wanted = if area {
@@ -337,7 +336,7 @@ impl Shared {
         } else {
             self.relation_lines && self.geometry_types.lines
         };
-        (wanted && self.filters.matches(ElementType::Relation, area, &tags)).then_some(area)
+        (wanted && f.matches(ElementType::Relation, area, &tags)).then_some(area)
     }
 }
 
@@ -400,8 +399,9 @@ pub fn export_features(
             move |_, b| {
                 let guard = s.needed_ways_builder.read().unwrap();
                 let set = guard.as_ref().unwrap();
+                let bf = s.filters.for_block(b);
                 for r in b.relations() {
-                    if s.relation_selected(&r).is_none() {
+                    if s.relation_selected(&r, &bf).is_none() {
                         continue;
                     }
                     // Every way member counts, whatever its role (as in
@@ -430,8 +430,9 @@ pub fn export_features(
             let guard = s.needed_nodes_builder.read().unwrap();
             let set = guard.as_ref().unwrap();
             let mut refs = RefBatch::new();
+            let bf = s.filters.for_block(b);
             for w in b.ways() {
-                let selected = want_ways && s.way_outputs(&w).is_some();
+                let selected = want_ways && s.way_outputs(&w, &bf).is_some();
                 let needed = any_needed_ways && needed_ways.contains(w.id());
                 if selected || needed {
                     set.insert_all(w.refs());
@@ -468,11 +469,12 @@ pub fn export_features(
                 let needed_nodes = s.needed_nodes.read().unwrap();
                 let mut out = Vec::new();
                 let mut batch: Vec<(i64, Location)> = Vec::new();
+                let bf = s.filters.for_block(b);
                 for n in b.nodes() {
                     if any_needed_nodes && needed_nodes.contains(n.id()) {
                         batch.push((n.id(), (n.lat_e7(), n.lon_e7())));
                     }
-                    if want_points && !n.tags().is_empty() && s.filters.matches(ElementType::Node, false, &n.tags()) {
+                    if want_points && !n.tags().is_empty() && bf.matches(ElementType::Node, false, &n.tags()) {
                         let (lon, lat) = (n.lon(), n.lat());
                         if !s.in_bbox([lon, lat, lon, lat]) {
                             continue;
@@ -517,8 +519,9 @@ pub fn export_features(
                 let mut out = Vec::new();
                 let mut batch = WayBatch::new();
                 let mut locs: Vec<Location> = Vec::new();
+                let bf = s.filters.for_block(b);
                 for w in b.ways() {
-                    let outputs = if want_ways { s.way_outputs(&w) } else { None };
+                    let outputs = if want_ways { s.way_outputs(&w, &bf) } else { None };
                     let needed = any_needed_ways && needed_ways.contains(w.id());
                     if outputs.is_none() && !needed {
                         continue;
@@ -614,8 +617,11 @@ pub fn export_features(
                     _ => way_store.get_into(id, buf),
                 }
             };
+            let bf = s.filters.for_block(b);
             for r in range.map(|i| b.relation(i)) {
-                let Some(area) = s.relation_selected(&r) else { continue };
+                let Some(area) = s.relation_selected(&r, &bf) else {
+                    continue;
+                };
                 let mut ways: Vec<Vec<LatpLon>> = Vec::new();
                 let mut missing = false;
                 // A way listed twice (under two roles) counts once, as in
@@ -1028,10 +1034,11 @@ pub fn export_elements_from_reader<R: std::io::Read + Send + 'static>(
         let mut out = Vec::new();
         decompress_blob(&raw, &mut out)?;
         let b = PrimitiveBlock::decode(&out, decode)?;
+        let bf = s.filters.for_block(&b);
         let mut els: Vec<Element> = Vec::new();
-        els.extend(b.nodes().filter_map(|x| s.node(&x)));
-        els.extend(b.ways().filter_map(|x| s.way(&x, None)));
-        els.extend(b.relations().filter_map(|x| s.relation(&x)));
+        els.extend(b.nodes().filter_map(|x| s.node(&x, &bf)));
+        els.extend(b.ways().filter_map(|x| s.way(&x, &bf, None)));
+        els.extend(b.relations().filter_map(|x| s.relation(&x, &bf)));
         Ok::<_, tilemaker_pbf::Error>(els)
     });
     let mut stats = ExportStats::default();
@@ -1109,8 +1116,9 @@ pub fn export_elements(
         runner.pass(Phase::ScanWays, only(ElementType::Way), &mut sink, move |_, b| {
             let guard = s.needed_nodes_builder.read().unwrap();
             let set = guard.as_ref().unwrap();
+            let bf = s.filters.for_block(b);
             for w in b.ways() {
-                if s.way_selected(&w) {
+                if s.way_selected(&w, &bf) {
                     set.insert_all(w.refs());
                 }
             }
@@ -1126,11 +1134,12 @@ pub fn export_elements(
             let needed = s.needed_nodes.read().unwrap();
             let mut batch = Vec::new();
             let mut out = Vec::new();
+            let bf = s.filters.for_block(b);
             for n in b.nodes() {
                 if needed.contains(n.id()) {
                     batch.push((n.id(), (n.lat_e7(), n.lon_e7())));
                 }
-                if let Some(e) = s.node(&n) {
+                if let Some(e) = s.node(&n, &bf) {
                     out.push(e);
                 }
             }
@@ -1149,13 +1158,15 @@ pub fn export_elements(
         let s = shared.clone();
         runner.pass(Phase::Ways, decode(false, true, false), &mut sink, move |_, b| {
             let store = s.store.read().unwrap();
-            Ok(b.ways().filter_map(|w| s.way(&w, store.as_ref())).collect())
+            let bf = s.filters.for_block(b);
+            Ok(b.ways().filter_map(|w| s.way(&w, &bf, store.as_ref())).collect())
         })?;
         drop(shared.store.write().unwrap().take());
         if opts.relations && c.filters.may_select(ElementType::Relation) {
             let s = shared.clone();
             runner.pass(Phase::Relations, decode(false, false, true), &mut sink, move |_, b| {
-                Ok(b.relations().filter_map(|r| s.relation(&r)).collect())
+                let bf = s.filters.for_block(b);
+                Ok(b.relations().filter_map(|r| s.relation(&r, &bf)).collect())
             })?;
         }
     } else {
@@ -1194,9 +1205,10 @@ pub fn export_elements(
         runner.layout = span;
         runner.pass(Phase::Elements, decode(dn, dw, dr), &mut sink, move |_, b| {
             let mut out: Vec<Element> = Vec::new();
-            out.extend(b.nodes().filter_map(|x| s.node(&x)));
-            out.extend(b.ways().filter_map(|x| s.way(&x, None)));
-            out.extend(b.relations().filter_map(|x| s.relation(&x)));
+            let bf = s.filters.for_block(b);
+            out.extend(b.nodes().filter_map(|x| s.node(&x, &bf)));
+            out.extend(b.ways().filter_map(|x| s.way(&x, &bf, None)));
+            out.extend(b.relations().filter_map(|x| s.relation(&x, &bf)));
             Ok(out)
         })?;
     }
@@ -1240,10 +1252,13 @@ impl ElemShared {
         b[0].is_finite() && !(b[2] < f[0] || b[0] > f[2] || b[3] < f[1] || b[1] > f[3])
     }
 
-    fn way_selected(&self, w: &Way<'_>) -> bool {
+    fn way_selected(&self, w: &Way<'_>, f: &BlockFilter<'_>) -> bool {
+        if !self.ways {
+            return false;
+        }
         let closed = Shared::way_is_closed(w);
         let area = closed && crate::area::is_area_by_tags(&w.tags());
-        self.ways && self.filters.matches(ElementType::Way, area, &w.tags())
+        f.matches(ElementType::Way, area, &w.tags())
     }
 
     fn meta(&self, i: Option<tilemaker_pbf::InfoRef<'_>>) -> Option<Meta> {
@@ -1254,8 +1269,8 @@ impl ElemShared {
         }
     }
 
-    fn node(&self, n: &tilemaker_pbf::Node<'_>) -> Option<Element> {
-        if !self.nodes || !self.filters.matches(ElementType::Node, false, &n.tags()) {
+    fn node(&self, n: &tilemaker_pbf::Node<'_>, f: &BlockFilter<'_>) -> Option<Element> {
+        if !self.nodes || !f.matches(ElementType::Node, false, &n.tags()) {
             return None;
         }
         let (lon, lat) = (n.lon(), n.lat());
@@ -1274,8 +1289,8 @@ impl ElemShared {
         })
     }
 
-    fn way(&self, w: &Way<'_>, store: Option<&NodeStore>) -> Option<Element> {
-        if !self.way_selected(w) {
+    fn way(&self, w: &Way<'_>, f: &BlockFilter<'_>, store: Option<&NodeStore>) -> Option<Element> {
+        if !self.way_selected(w, f) {
             return None;
         }
         let locations = if self.way_locations {
@@ -1324,9 +1339,9 @@ impl ElemShared {
         })
     }
 
-    fn relation(&self, r: &Relation<'_>) -> Option<Element> {
+    fn relation(&self, r: &Relation<'_>, f: &BlockFilter<'_>) -> Option<Element> {
         let area = is_area_relation(&r.tags());
-        if !self.relations || !self.filters.matches(ElementType::Relation, area, &r.tags()) {
+        if !self.relations || !f.matches(ElementType::Relation, area, &r.tags()) {
             return None;
         }
         Some(Element {

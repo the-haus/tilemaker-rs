@@ -93,6 +93,13 @@ impl<'a> Reader<'a> {
         Ok(out)
     }
 
+    /// The next length-delimited field's bytes, without consuming them.
+    #[inline]
+    pub(crate) fn peek_bytes(&self) -> Result<&'a [u8], Error> {
+        let mut r = *self;
+        r.bytes()
+    }
+
     pub(crate) fn skip(&mut self, wire: u8) -> Result<(), Error> {
         match wire {
             VARINT => {

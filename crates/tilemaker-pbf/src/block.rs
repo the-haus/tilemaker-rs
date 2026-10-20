@@ -137,7 +137,9 @@ pub struct BlockKinds {
 /// A decoded block of OSM elements.
 #[derive(Debug, Default)]
 pub struct PrimitiveBlock {
-    strings: Vec<Box<str>>,
+    /// The string table: all strings back to back, and where each ends.
+    str_data: String,
+    str_ends: Vec<u32>,
     nodes: Vec<NodeData>,
     ways: Vec<WayData>,
     relations: Vec<RelationData>,
@@ -163,15 +165,17 @@ impl PrimitiveBlock {
         while let Some((field, wire)) = r.field()? {
             match (field, wire) {
                 (1, LEN) => {
-                    let mut st = Reader::new(r.bytes()?);
+                    let table = r.bytes()?;
+                    block.str_data.reserve(table.len());
+                    let mut st = Reader::new(table);
                     while let Some((f, w)) = st.field()? {
                         if f == 1 && w == LEN {
                             let s = st.bytes()?;
-                            let s = match std::str::from_utf8(s) {
-                                Ok(s) => s.into(),
-                                Err(_) => String::from_utf8_lossy(s).into_owned().into_boxed_str(),
-                            };
-                            block.strings.push(s);
+                            match std::str::from_utf8(s) {
+                                Ok(s) => block.str_data.push_str(s),
+                                Err(_) => block.str_data.push_str(&String::from_utf8_lossy(s)),
+                            }
+                            block.str_ends.push(block.str_data.len() as u32);
                         } else {
                             st.skip(w)?;
                         }
@@ -185,8 +189,8 @@ impl PrimitiveBlock {
                 _ => r.skip(wire)?,
             }
         }
-        if block.strings.is_empty() {
-            block.strings.push("".into());
+        if block.str_ends.is_empty() {
+            block.str_ends.push(0);
         }
 
         let coords = Coords {
@@ -195,13 +199,14 @@ impl PrimitiveBlock {
             lon_offset,
             date_granularity,
         };
+        let mut scratch = Scratch::default();
         for g in groups {
-            block.decode_group(g, &coords, opts)?;
+            block.decode_group(g, &coords, opts, &mut scratch)?;
         }
         Ok(block)
     }
 
-    fn decode_group(&mut self, data: &[u8], c: &Coords, opts: DecodeOptions) -> Result<(), Error> {
+    fn decode_group(&mut self, data: &[u8], c: &Coords, opts: DecodeOptions, sc: &mut Scratch) -> Result<(), Error> {
         let mut r = Reader::new(data);
         while let Some((field, wire)) = r.field()? {
             match (field, wire) {
@@ -209,7 +214,7 @@ impl PrimitiveBlock {
                     self.kinds.nodes = true;
                     let b = r.bytes()?;
                     if opts.nodes {
-                        self.decode_node(b, c, opts)?;
+                        self.decode_node(b, c, opts, sc)?;
                     }
                 }
                 (2, LEN) => {
@@ -223,14 +228,14 @@ impl PrimitiveBlock {
                     self.kinds.ways = true;
                     let b = r.bytes()?;
                     if opts.ways {
-                        self.decode_way(b, c, opts)?;
+                        self.decode_way(b, c, opts, sc)?;
                     }
                 }
                 (4, LEN) => {
                     self.kinds.relations = true;
                     let b = r.bytes()?;
                     if opts.relations {
-                        self.decode_relation(b, c, opts)?;
+                        self.decode_relation(b, c, opts, sc)?;
                     }
                 }
                 _ => r.skip(wire)?,
@@ -240,7 +245,7 @@ impl PrimitiveBlock {
     }
 
     fn string_index(&self, i: u64) -> Result<u32, Error> {
-        if (i as usize) < self.strings.len() {
+        if (i as usize) < self.str_ends.len() {
             Ok(i as u32)
         } else {
             Err(Error::Corrupt("string table index out of range"))
@@ -285,11 +290,12 @@ impl PrimitiveBlock {
         Ok(self.infos.len() as u32 - 1)
     }
 
-    fn decode_node(&mut self, data: &[u8], c: &Coords, opts: DecodeOptions) -> Result<(), Error> {
+    fn decode_node(&mut self, data: &[u8], c: &Coords, opts: DecodeOptions, sc: &mut Scratch) -> Result<(), Error> {
         let mut r = Reader::new(data);
         let (mut id, mut lat, mut lon) = (0i64, 0i64, 0i64);
-        let mut keys = Vec::new();
-        let mut vals = Vec::new();
+        let Scratch { keys, vals, .. } = sc;
+        keys.clear();
+        vals.clear();
         let mut info = NO_INFO;
         while let Some((field, wire)) = r.field()? {
             match field {
@@ -305,7 +311,7 @@ impl PrimitiveBlock {
                 _ => r.skip(wire)?,
             }
         }
-        let tags = self.push_tags(&keys, &vals)?;
+        let tags = self.push_tags(keys, vals)?;
         self.nodes.push(NodeData {
             id,
             lat: c.lat(lat),
@@ -337,6 +343,12 @@ impl PrimitiveBlock {
             None
         };
 
+        let n = count_varints(ids);
+        self.nodes.reserve(n);
+        if !kv.is_empty() {
+            // Pairs plus one 0 per node.
+            self.tags.reserve(count_varints(kv).saturating_sub(n) / 2);
+        }
         let mut id_r = Reader::new(ids);
         let mut lat_r = Reader::new(lats);
         let mut lon_r = Reader::new(lons);
@@ -412,7 +424,7 @@ impl PrimitiveBlock {
             cs = cs.wrapping_add(changeset.get(i).copied().unwrap_or(0));
             u = u.wrapping_add(uid.get(i).copied().unwrap_or(0));
             us = us.wrapping_add(user.get(i).copied().unwrap_or(0));
-            let user_sid = if us >= 0 && (us as usize) < self.strings.len() {
+            let user_sid = if us >= 0 && (us as usize) < self.str_ends.len() {
                 us as u32
             } else {
                 0
@@ -432,16 +444,19 @@ impl PrimitiveBlock {
         Ok(out)
     }
 
-    fn decode_way(&mut self, data: &[u8], c: &Coords, opts: DecodeOptions) -> Result<(), Error> {
+    fn decode_way(&mut self, data: &[u8], c: &Coords, opts: DecodeOptions, sc: &mut Scratch) -> Result<(), Error> {
         let mut r = Reader::new(data);
         let mut id = 0i64;
-        let mut keys = Vec::new();
-        let mut vals = Vec::new();
+        let Scratch {
+            keys, vals, lats, lons, ..
+        } = sc;
+        keys.clear();
+        vals.clear();
+        lats.clear();
+        lons.clear();
         let mut info = NO_INFO;
         let refs_start = self.refs.len() as u32;
         let locs_start = self.locs.len() as u32;
-        let mut lats: Vec<i64> = Vec::new();
-        let mut lons: Vec<i64> = Vec::new();
         while let Some((field, wire)) = r.field()? {
             match field {
                 1 => id = r.int64()?,
@@ -454,6 +469,9 @@ impl PrimitiveBlock {
                 8 => {
                     let mut acc = 0i64;
                     let refs = &mut self.refs;
+                    if wire == LEN {
+                        refs.reserve(count_varints(r.peek_bytes()?));
+                    }
                     each_varint(&mut r, wire, |v| {
                         acc = acc.wrapping_add(zigzag(v));
                         refs.push(acc);
@@ -477,11 +495,11 @@ impl PrimitiveBlock {
             }
         }
         if !lats.is_empty() && lats.len() == lons.len() {
-            for (la, lo) in lats.into_iter().zip(lons) {
+            for (&la, &lo) in lats.iter().zip(lons.iter()) {
                 self.locs.push((c.lat(la), c.lon(lo)));
             }
         }
-        let tags = self.push_tags(&keys, &vals)?;
+        let tags = self.push_tags(keys, vals)?;
         self.ways.push(WayData {
             id,
             tags,
@@ -498,15 +516,23 @@ impl PrimitiveBlock {
         Ok(())
     }
 
-    fn decode_relation(&mut self, data: &[u8], c: &Coords, opts: DecodeOptions) -> Result<(), Error> {
+    fn decode_relation(&mut self, data: &[u8], c: &Coords, opts: DecodeOptions, sc: &mut Scratch) -> Result<(), Error> {
         let mut r = Reader::new(data);
         let mut id = 0i64;
-        let mut keys = Vec::new();
-        let mut vals = Vec::new();
+        let Scratch {
+            keys,
+            vals,
+            roles,
+            memids,
+            types,
+            ..
+        } = sc;
+        keys.clear();
+        vals.clear();
+        roles.clear();
+        memids.clear();
+        types.clear();
         let mut info = NO_INFO;
-        let mut roles: Vec<u64> = Vec::new();
-        let mut memids: Vec<i64> = Vec::new();
-        let mut types: Vec<u64> = Vec::new();
         while let Some((field, wire)) = r.field()? {
             match field {
                 1 => id = r.int64()?,
@@ -546,7 +572,7 @@ impl PrimitiveBlock {
                 role,
             });
         }
-        let tags = self.push_tags(&keys, &vals)?;
+        let tags = self.push_tags(keys, vals)?;
         self.relations.push(RelationData {
             id,
             tags,
@@ -559,9 +585,19 @@ impl PrimitiveBlock {
         Ok(())
     }
 
+    /// Number of strings in the block's string table.
+    pub fn string_count(&self) -> usize {
+        self.str_ends.len()
+    }
+
     /// The block's string table.
-    pub fn strings(&self) -> &[Box<str>] {
-        &self.strings
+    pub fn strings(&self) -> impl ExactSizeIterator<Item = &str> + '_ {
+        (0..self.str_ends.len() as u32).map(move |i| self.s(i))
+    }
+
+    /// String `i` of the table.
+    pub fn string(&self, i: u32) -> Option<&str> {
+        ((i as usize) < self.str_ends.len()).then(|| self.s(i))
     }
 
     /// Kinds of elements present (even those not decoded).
@@ -609,12 +645,18 @@ impl PrimitiveBlock {
 
     /// Index of a string in the table, if present.
     pub fn find_string(&self, s: &str) -> Option<u32> {
-        self.strings.iter().position(|x| &**x == s).map(|i| i as u32)
+        self.strings().position(|x| x == s).map(|i| i as u32)
     }
 
     #[inline]
     fn s(&self, i: u32) -> &str {
-        &self.strings[i as usize]
+        let end = self.str_ends[i as usize] as usize;
+        let start = match i {
+            0 => 0,
+            _ => self.str_ends[i as usize - 1] as usize,
+        };
+        // Ends are char boundaries: each string was pushed whole.
+        &self.str_data[start..end]
     }
 
     fn tags_of(&self, span: Span) -> Tags<'_> {
@@ -631,6 +673,24 @@ impl PrimitiveBlock {
             user_sid: self.infos[i as usize].1,
         })
     }
+}
+
+/// Buffers reused across a block's elements.
+#[derive(Default)]
+struct Scratch {
+    keys: Vec<u32>,
+    vals: Vec<u32>,
+    lats: Vec<i64>,
+    lons: Vec<i64>,
+    roles: Vec<u64>,
+    memids: Vec<i64>,
+    types: Vec<u64>,
+}
+
+/// Number of varints in a packed field (each ends with a byte below 0x80).
+#[inline]
+fn count_varints(b: &[u8]) -> usize {
+    b.iter().filter(|&&x| x < 0x80).count()
 }
 
 struct Coords {

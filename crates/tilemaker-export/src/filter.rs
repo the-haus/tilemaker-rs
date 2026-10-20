@@ -12,7 +12,7 @@
 //! the default is `nwr`. Keys and values may contain `*` wildcards
 //! (`name:*`, `*bahn*`). An element is selected when any filter matches.
 
-use tilemaker_pbf::{ElementType, Tags};
+use tilemaker_pbf::{ElementType, PrimitiveBlock, Tags};
 
 /// Which element types a filter applies to.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -212,6 +212,7 @@ fn values(v: &str) -> Vec<Pattern> {
 #[derive(Clone, Debug, Default)]
 pub struct FilterSet {
     filters: Vec<TagFilter>,
+    slots: Slots,
     /// Select untagged elements too (only when there are no filters).
     pub include_untagged: bool,
 }
@@ -220,6 +221,7 @@ impl FilterSet {
     /// From parsed filters.
     pub fn new(filters: Vec<TagFilter>) -> Self {
         Self {
+            slots: Slots::new(&filters),
             filters,
             include_untagged: false,
         }
@@ -266,6 +268,12 @@ impl FilterSet {
             .any(|f| f.types.covers(kind, is_area) && f.matches_tags(tags.iter()))
     }
 
+    /// The filters resolved against one block's string table, so that
+    /// matching its elements compares string indices instead of strings.
+    pub fn for_block(&self, block: &PrimitiveBlock) -> BlockFilter<'_> {
+        BlockFilter::new(self, block)
+    }
+
     /// Like [`matches`](Self::matches) for owned tag pairs.
     pub fn matches_pairs(&self, kind: ElementType, is_area: bool, tags: &[(&str, &str)]) -> bool {
         if self.filters.is_empty() {
@@ -274,6 +282,166 @@ impl FilterSet {
         self.filters
             .iter()
             .any(|f| f.types.covers(kind, is_area) && f.matches_tags(tags.iter().copied()))
+    }
+}
+
+/// The distinct patterns of a filter set, and which ones each filter uses.
+#[derive(Clone, Debug, Default)]
+struct Slots {
+    patterns: Vec<Pattern>,
+    /// Bit `n` is set when an exact pattern is `n` bytes long (63: longer).
+    lengths: u64,
+    /// Per filter: the key's slot and the values' slots.
+    filters: Vec<(usize, Vec<usize>)>,
+}
+
+impl Slots {
+    fn new(filters: &[TagFilter]) -> Self {
+        let mut s = Slots::default();
+        let slot = |p: &Pattern, s: &mut Slots| match s.patterns.iter().position(|q| q == p) {
+            Some(i) => i,
+            None => {
+                if let Pattern::Exact(e) = p {
+                    s.lengths |= 1 << e.len().min(63);
+                }
+                s.patterns.push(p.clone());
+                s.patterns.len() - 1
+            }
+        };
+        for f in filters {
+            let key = slot(&f.key, &mut s);
+            let values = match &f.condition {
+                Condition::OneOf(v) | Condition::NoneOf(v) => v.iter().map(|p| slot(p, &mut s)).collect(),
+                _ => Vec::new(),
+            };
+            s.filters.push((key, values));
+        }
+        s
+    }
+}
+
+/// The string-table indices one pattern matches in a block, ascending.
+#[derive(Clone, Debug, Default)]
+struct Hits(Vec<u32>);
+
+impl Hits {
+    #[inline]
+    fn has(&self, i: u32) -> bool {
+        if self.0.len() <= 8 {
+            self.0.contains(&i)
+        } else {
+            self.0.binary_search(&i).is_ok()
+        }
+    }
+}
+
+/// A [`FilterSet`] resolved against one block (see [`FilterSet::for_block`]).
+#[derive(Clone, Debug)]
+pub struct BlockFilter<'a> {
+    set: &'a FilterSet,
+    /// Per pattern slot.
+    hits: Vec<Hits>,
+    /// Per filter: whether it can apply to the block's elements at all.
+    active: Vec<bool>,
+}
+
+impl<'a> BlockFilter<'a> {
+    fn new(set: &'a FilterSet, block: &PrimitiveBlock) -> Self {
+        let (n, w, r) = (
+            block.node_count() > 0,
+            block.way_count() > 0,
+            block.relation_count() > 0,
+        );
+        let active: Vec<bool> = set
+            .filters
+            .iter()
+            .map(|f| {
+                (f.types.nodes && n)
+                    || ((f.types.ways || f.types.areas) && w)
+                    || ((f.types.relations || f.types.areas) && r)
+            })
+            .collect();
+        let slots = &set.slots;
+        let mut needed = vec![false; slots.patterns.len()];
+        for ((key, values), _) in slots.filters.iter().zip(&active).filter(|(_, &a)| a) {
+            needed[*key] = true;
+            for &v in values {
+                needed[v] = true;
+            }
+        }
+        let globs: Vec<usize> = (0..needed.len())
+            .filter(|&i| needed[i] && matches!(slots.patterns[i], Pattern::Glob(_)))
+            .collect();
+        let exacts: Vec<usize> = (0..needed.len())
+            .filter(|&i| needed[i] && matches!(slots.patterns[i], Pattern::Exact(_)))
+            .collect();
+        let mut hits = vec![Hits::default(); needed.len()];
+        if !globs.is_empty() || !exacts.is_empty() {
+            for (i, s) in block.strings().enumerate() {
+                if slots.lengths & (1 << s.len().min(63)) != 0 {
+                    for &e in &exacts {
+                        if matches!(&slots.patterns[e], Pattern::Exact(p) if p == s) {
+                            hits[e].0.push(i as u32);
+                        }
+                    }
+                }
+                for &g in &globs {
+                    if slots.patterns[g].matches(s) {
+                        hits[g].0.push(i as u32);
+                    }
+                }
+            }
+        }
+        Self { set, hits, active }
+    }
+
+    #[inline]
+    fn filter_matches(&self, f: &TagFilter, key: usize, values: &[usize], pairs: &[(u32, u32)]) -> bool {
+        let keys = &self.hits[key];
+        if keys.0.is_empty() {
+            return matches!(f.condition, Condition::Absent);
+        }
+        let value_in = |v: u32| values.iter().any(|&s| self.hits[s].has(v));
+        let mut found = false;
+        for &(k, v) in pairs {
+            if !keys.has(k) {
+                continue;
+            }
+            found = true;
+            match &f.condition {
+                Condition::Present => return true,
+                Condition::Absent => return false,
+                Condition::OneOf(_) => {
+                    if value_in(v) {
+                        return true;
+                    }
+                }
+                Condition::NoneOf(_) => {
+                    if !value_in(v) {
+                        return true;
+                    }
+                }
+            }
+        }
+        matches!(f.condition, Condition::Absent) && !found
+    }
+
+    /// Whether an element of the block with these tags is selected (as
+    /// [`FilterSet::matches`]).
+    #[inline]
+    pub fn matches(&self, kind: ElementType, is_area: bool, tags: &Tags<'_>) -> bool {
+        let set = self.set;
+        if set.filters.is_empty() {
+            return set.include_untagged || !tags.is_empty();
+        }
+        let pairs = tags.raw();
+        set.filters
+            .iter()
+            .zip(&set.slots.filters)
+            .zip(&self.active)
+            .any(|((f, (key, values)), &active)| {
+                active && f.types.covers(kind, is_area) && self.filter_matches(f, *key, values, pairs)
+            })
     }
 }
 
@@ -346,6 +514,86 @@ mod tests {
         assert!(Pattern::new("ab*").matches("ab"));
         assert!(!Pattern::new("*ab").matches("b"));
         assert!(!Pattern::new("a*a").matches("a"));
+    }
+
+    /// Blocks of nodes with random tags from a small vocabulary.
+    fn random_blocks() -> Vec<tilemaker_pbf::PrimitiveBlock> {
+        use tilemaker_pbf::{decompress_blob, BlobKind, BlobReader, DecodeOptions, PbfWriter};
+        let keys = [
+            "highway",
+            "name",
+            "name:de",
+            "amenity",
+            "building",
+            "place",
+            "admin_level",
+        ];
+        let vals = ["yes", "primary", "cafe", "city", "town", "2", "4", "Autobahnkreuz", ""];
+        let mut seed = 42u64;
+        let mut rnd = |n: usize| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as usize % n
+        };
+        let mut w = PbfWriter::new(Vec::new());
+        for id in 1..20_000 {
+            let tags: Vec<(&str, &str)> = (0..rnd(4))
+                .map(|_| (keys[rnd(keys.len())], vals[rnd(vals.len())]))
+                .collect();
+            w.node(id, 0, 0, &tags).unwrap();
+        }
+        let bytes = w.finish().unwrap();
+        let mut out = Vec::new();
+        for b in BlobReader::new(bytes.as_slice()) {
+            let (info, raw) = b.unwrap();
+            if info.kind == BlobKind::Data {
+                let mut data = Vec::new();
+                decompress_blob(&raw, &mut data).unwrap();
+                out.push(tilemaker_pbf::PrimitiveBlock::decode(&data, DecodeOptions::ALL).unwrap());
+            }
+        }
+        assert!(out.len() > 1);
+        out
+    }
+
+    #[test]
+    fn block_filters_match_string_filters() {
+        let blocks = random_blocks();
+        let exprs: &[&[&str]] = &[
+            &["highway"],
+            &["n/place=city,town"],
+            &["highway!=primary"],
+            &["!building"],
+            &["name:*"],
+            &["name=*bahn*"],
+            &["admin_level=2", "amenity=cafe,yes"],
+            &["nope", "w/highway"],
+            &["missing=x"],
+            &["!missing"],
+            &["*=city"],
+            &["highway="],
+        ];
+        let mut total_hits = 0;
+        for e in exprs {
+            let Ok(set) = FilterSet::parse(e) else { continue };
+            let (mut n, mut hits) = (0, 0);
+            for b in &blocks {
+                let bf = set.for_block(b);
+                for node in b.nodes() {
+                    let want = set.matches(ElementType::Node, false, &node.tags());
+                    assert_eq!(
+                        bf.matches(ElementType::Node, false, &node.tags()),
+                        want,
+                        "{e:?} {}",
+                        node.id()
+                    );
+                    n += 1;
+                    hits += want as usize;
+                }
+            }
+            assert!(n > 0);
+            total_hits += hits;
+        }
+        assert!(total_hits > 10_000, "{total_hits}");
     }
 
     #[test]
