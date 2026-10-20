@@ -405,8 +405,8 @@ impl Interner {
             }
             shift += 7;
         }
-        // Only whole strings were written.
-        std::str::from_utf8(&page[pos..pos + len]).unwrap_or_default()
+        // SAFETY: only whole `&str`s were written, so this is one.
+        unsafe { std::str::from_utf8_unchecked(&page[pos..pos + len]) }
     }
 
     fn intern(&mut self, s: &str) -> u32 {

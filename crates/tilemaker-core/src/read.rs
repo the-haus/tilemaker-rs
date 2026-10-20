@@ -5,10 +5,9 @@
 
 use std::cell::RefCell;
 use std::ops::Range;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
-use rayon::prelude::*;
 use tilemaker_geom::coords::{lat2latp, LatpLon};
 use tilemaker_lua::{LuaProfile, MemberKind, Object, ObjectKind, ScannedRelations, Shared};
 use tilemaker_pbf::{DecodeOptions, ElementType, PbfFile, PrimitiveBlock, Tags};
@@ -128,7 +127,10 @@ pub(crate) struct Reader<'a> {
 }
 
 impl Reader<'_> {
-    /// Run `f` over `range` on the pool; `merge` each result here.
+    /// Run `f` over `range` on the pool; `merge` each result here, in file
+    /// order (so object and attribute numbering, and with them the tiles,
+    /// do not depend on scheduling). Workers claim blocks in order and stay
+    /// at most a window ahead of the merging.
     fn phase<R: Send>(
         &mut self,
         phase: Phase,
@@ -141,44 +143,71 @@ impl Reader<'_> {
         if total == 0 || self.stop.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let (tx, rx) = crossbeam_channel::bounded::<Result<R, CoreError>>(self.threads * 2);
+        let window = self.threads * 4;
+        let (tx, rx) = crossbeam_channel::unbounded::<(usize, Result<R, CoreError>)>();
         let file = self.file;
         let pool = self.pool;
         let stop = self.stop.clone();
         let f = &f;
+        let next = AtomicUsize::new(0);
+        // Blocks merged so far, which bounds how far workers run ahead.
+        let merged = (Mutex::new(0usize), Condvar::new());
+        let (next, merged) = (&next, &merged);
         std::thread::scope(|s| -> Result<(), CoreError> {
+            let stop_w = stop.clone();
             s.spawn(move || {
-                pool.install(|| {
-                    range.into_par_iter().for_each_with(tx, |tx, i| {
-                        if stop.load(Ordering::Relaxed) {
-                            return;
+                pool.broadcast(|_| loop {
+                    let k = next.fetch_add(1, Ordering::Relaxed);
+                    if k >= total || stop_w.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    {
+                        let mut m = merged.0.lock().unwrap();
+                        while k >= *m + window && !stop_w.load(Ordering::Relaxed) {
+                            m = merged.1.wait(m).unwrap();
                         }
-                        let r = file.decode_block(i, opts).map_err(CoreError::from).and_then(f);
-                        if r.is_err() {
-                            stop.store(true, Ordering::Relaxed);
-                        }
-                        let _ = tx.send(r);
-                    })
-                })
+                    }
+                    if stop_w.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let r = file
+                        .decode_block(range.start + k, opts)
+                        .map_err(CoreError::from)
+                        .and_then(f);
+                    if r.is_err() {
+                        stop_w.store(true, Ordering::Relaxed);
+                        merged.1.notify_all();
+                    }
+                    if tx.send((k, r)).is_err() {
+                        break;
+                    }
+                });
+                drop(tx);
             });
+            let mut pending = std::collections::BTreeMap::new();
             let mut done = 0;
             let mut first_err = None;
-            for r in rx {
-                match r {
-                    Ok(r) => merge(r),
-                    Err(e) => {
-                        first_err.get_or_insert(e);
-                        continue;
+            for (k, r) in rx {
+                pending.insert(k, r);
+                while let Some(r) = pending.remove(&done) {
+                    match r {
+                        Ok(r) => merge(r),
+                        Err(e) => {
+                            first_err.get_or_insert(e);
+                        }
                     }
-                }
-                done += 1;
-                if (self.progress)(Progress::Read {
-                    phase,
-                    blocks_done: done,
-                    blocks_total: total,
-                }) == Flow::Stop
-                {
-                    self.stop.store(true, Ordering::Relaxed);
+                    done += 1;
+                    *merged.0.lock().unwrap() = done;
+                    merged.1.notify_all();
+                    if (self.progress)(Progress::Read {
+                        phase,
+                        blocks_done: done,
+                        blocks_total: total,
+                    }) == Flow::Stop
+                    {
+                        stop.store(true, Ordering::Relaxed);
+                        merged.1.notify_all();
+                    }
                 }
             }
             match first_err {
@@ -254,7 +283,7 @@ pub(crate) fn read(
                     let mut is_accepted = false;
                     if !mp {
                         if caps.relation_scan {
-                            is_accepted = profiles.with(|p| Ok(p.scan_relation(rel.id(), owned_tags(&tags))?))?;
+                            is_accepted = profiles.with(|p| Ok(p.scan_relation(rel.id(), tags.iter())?))?;
                         }
                         if !is_accepted {
                             continue;
@@ -354,20 +383,17 @@ pub(crate) fn read(
                     let tags = n.tags();
                     let mut emitted = false;
                     if caps.nodes && !tags.is_empty() && nk.filter(&tags) {
-                        let obj = Object {
-                            kind: ObjectKind::Node,
-                            id: n.id(),
-                            tags: owned_tags(&tags),
-                            location: Some(latp_lon(loc)),
-                            relations: if sc.is_empty() {
-                                Vec::new()
-                            } else {
-                                sc.relations_for(MemberKind::Node, n.id())
-                            },
-                            ..Object::default()
+                        let fill = |o: &mut Object| {
+                            o.kind = ObjectKind::Node;
+                            o.id = n.id();
+                            o.tags.extend(tags.iter());
+                            o.location = Some(latp_lon(loc));
+                            if !sc.is_empty() {
+                                o.relations = sc.relations_for(MemberKind::Node, n.id());
+                            }
                         };
                         counters.nodes.fetch_add(1, Ordering::Relaxed);
-                        let processed = profiles.with(|p| Ok(p.process(obj)?))?;
+                        let processed = profiles.with(|p| Ok(p.process_with(fill)?))?;
                         if !processed.is_empty() {
                             emitted = true;
                             out.push(coverage(processed, base_zoom, Footprint::Node));
@@ -410,6 +436,7 @@ pub(crate) fn read(
                 let mut out = Vec::new();
                 let mut batch = WayBatch::new();
                 let mut locs: Vec<LatpLon> = Vec::new();
+                let mut nodes = ns.cursor();
                 for w in b.ways() {
                     let used = uw.contains(w.id());
                     let tags = w.tags();
@@ -423,7 +450,7 @@ pub(crate) fn read(
                         locs.extend(l.iter().map(|&x| latp_lon(x)));
                     } else {
                         for &id in w.refs() {
-                            match ns.get(id) {
+                            match nodes.get(id) {
                                 Some(x) => locs.push(latp_lon(x)),
                                 None => missing = true,
                             }
@@ -439,20 +466,17 @@ pub(crate) fn read(
                         batch.push(w.id(), locs.iter().map(|ll| (ll.latp, ll.lon)));
                     }
                     if caps.ways {
-                        let obj = Object {
-                            kind: ObjectKind::Way,
-                            id: w.id(),
-                            tags: owned_tags(&tags),
-                            nodes: locs.clone(),
-                            relations: if sc.is_empty() {
-                                Vec::new()
-                            } else {
-                                sc.relations_for(MemberKind::Way, w.id())
-                            },
-                            ..Object::default()
+                        let fill = |o: &mut Object| {
+                            o.kind = ObjectKind::Way;
+                            o.id = w.id();
+                            o.tags.extend(tags.iter());
+                            o.nodes.extend_from_slice(&locs);
+                            if !sc.is_empty() {
+                                o.relations = sc.relations_for(MemberKind::Way, w.id());
+                            }
                         };
                         counters.ways.fetch_add(1, Ordering::Relaxed);
-                        let processed = profiles.with(|p| Ok(p.process(obj)?))?;
+                        let processed = profiles.with(|p| Ok(p.process_with(fill)?))?;
                         if !processed.is_empty() {
                             out.push(coverage(processed, base_zoom, Footprint::Way(&locs)));
                         }
@@ -533,20 +557,19 @@ pub(crate) fn read(
                         }
                     }
                     let footprint: Vec<Vec<LatpLon>> = outers.clone();
-                    let obj = Object {
-                        kind: ObjectKind::Relation,
-                        id: rel.id(),
-                        tags,
-                        outers,
-                        inners,
-                        closed: inner_outer,
-                        multipolygon: mp,
-                        node_members,
-                        relations: sc.relations_for(MemberKind::Relation, rel.id()),
-                        ..Object::default()
+                    let fill = |o: &mut Object| {
+                        o.kind = ObjectKind::Relation;
+                        o.id = rel.id();
+                        o.tags.extend(tags.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+                        o.outers = outers;
+                        o.inners = inners;
+                        o.closed = inner_outer;
+                        o.multipolygon = mp;
+                        o.node_members = node_members;
+                        o.relations = sc.relations_for(MemberKind::Relation, rel.id());
                     };
                     counters.relations.fetch_add(1, Ordering::Relaxed);
-                    let processed = profiles.with(|p| Ok(p.process(obj)?))?;
+                    let processed = profiles.with(|p| Ok(p.process_with(fill)?))?;
                     if !processed.is_empty() {
                         out.push(coverage(processed, base_zoom, Footprint::Relation(&footprint)));
                     }

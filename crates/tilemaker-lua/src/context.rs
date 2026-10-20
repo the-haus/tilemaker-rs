@@ -13,6 +13,7 @@ use tilemaker_geom::{ll_to_coord, ll_to_linestring, LineString, MultiLineString,
 
 use crate::output::{Attribute, AttributeValue, GeometryKind, OutputGeometry, PendingOutput, ProcessedObject};
 use crate::relations::{MemberKind, ScannedRelations};
+use crate::tags::{self, TagBuf};
 use crate::Shared;
 
 /// The type of the object being processed.
@@ -35,7 +36,7 @@ pub struct Object {
     /// Id.
     pub id: i64,
     /// Tags.
-    pub tags: Vec<(String, String)>,
+    pub tags: TagBuf,
     /// Nodes: the location.
     pub location: Option<LatpLon>,
     /// Ways: node locations.
@@ -55,6 +56,21 @@ pub struct Object {
 }
 
 impl Object {
+    /// Empty it for the next object, keeping its buffers.
+    fn reset(&mut self) {
+        self.kind = ObjectKind::Node;
+        self.id = 0;
+        self.tags.clear();
+        self.location = None;
+        self.nodes.clear();
+        self.outers.clear();
+        self.inners.clear();
+        self.closed = false;
+        self.multipolygon = false;
+        self.node_members.clear();
+        self.relations.clear();
+    }
+
     fn is_closed(&self) -> bool {
         match self.kind {
             ObjectKind::Node => false,
@@ -111,9 +127,13 @@ impl Context {
         }
     }
 
-    pub(crate) fn begin(&mut self, obj: Object) {
-        self.id = obj.id;
-        self.obj = obj;
+    /// Start an object filled in place by `fill` (reusing the buffers of
+    /// the previous one).
+    pub(crate) fn begin_with(&mut self, fill: impl FnOnce(&mut Object)) {
+        self.obj.reset();
+        fill(&mut self.obj);
+        tags::set_current(&self.obj.tags);
+        self.id = self.obj.id;
         self.accepted = false;
         self.relation_cursor = -1;
         self.outputs.clear();
@@ -129,20 +149,17 @@ impl Context {
         }
     }
 
+    pub(crate) fn object(&self) -> &Object {
+        &self.obj
+    }
+
     pub(crate) fn finish(&mut self) -> ProcessedObject {
+        tags::clear_current();
         ProcessedObject {
             id: self.id,
             geometries: std::mem::take(&mut self.geometries),
             outputs: std::mem::take(&mut self.outputs),
         }
-    }
-
-    fn find(&self, key: &[u8]) -> Option<&str> {
-        self.obj
-            .tags
-            .iter()
-            .find(|(k, _)| k.as_bytes() == key)
-            .map(|(_, v)| v.as_str())
     }
 
     fn linestring(&mut self) -> Arc<LineString> {
@@ -414,22 +431,11 @@ fn with<R>(lua: &Lua, f: impl FnOnce(&mut Context) -> R) -> R {
 pub(crate) fn register(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    g.set(
-        "Find",
-        // `String` arguments are read straight off the stack; `LuaString`
-        // ones would each take (and drop) a registry reference.
-        lua.create_function(|lua, key: String| {
-            let c = lua.app_data_ref::<Context>().unwrap();
-            lua.create_string(c.find(key.as_bytes()).unwrap_or(""))
-        })?,
-    )?;
-    g.set(
-        "Holds",
-        lua.create_function(|lua, key: String| {
-            let c = lua.app_data_ref::<Context>().unwrap();
-            Ok(c.find(key.as_bytes()).is_some())
-        })?,
-    )?;
+    // The hottest calls: plain C functions that compare the key on the
+    // stack with the current tags, allocating nothing.
+    // SAFETY: they only read the stack and the current object's tags.
+    g.set("Find", unsafe { lua.create_c_function(tags::find)? })?;
+    g.set("Holds", unsafe { lua.create_c_function(tags::holds)? })?;
     g.set(
         "HasTags",
         lua.create_function(|lua, ()| Ok(!lua.app_data_ref::<Context>().unwrap().obj.tags.is_empty()))?,
@@ -443,7 +449,7 @@ pub(crate) fn register(lua: &Lua) -> mlua::Result<()> {
                 .obj
                 .tags
                 .iter()
-                .map(|t| t.0.clone())
+                .map(|t| t.0.to_string())
                 .collect();
             lua.create_sequence_from(keys)
         })?,
@@ -451,7 +457,7 @@ pub(crate) fn register(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "AllTags",
         lua.create_function(|lua, ()| {
-            let tags = lua.app_data_ref::<Context>().unwrap().obj.tags.clone();
+            let tags = lua.app_data_ref::<Context>().unwrap().obj.tags.to_vec();
             lua.create_table_from(tags)
         })?,
     )?;

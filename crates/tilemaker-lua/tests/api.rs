@@ -24,8 +24,8 @@ fn profile(src: &str) -> (LuaProfile, Arc<Shared>) {
     (LuaProfile::load(src, "test.lua", shared.clone(), true).unwrap(), shared)
 }
 
-fn tags(t: &[(&str, &str)]) -> Vec<(String, String)> {
-    t.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+fn tags(t: &[(&str, &str)]) -> TagBuf {
+    t.iter().copied().collect()
 }
 
 const PROFILE: &str = r#"
@@ -185,8 +185,8 @@ fn way_lines_areas_and_centroids() {
 #[test]
 fn relations_scan_and_multipolygons() {
     let (mut p, _) = profile(PROFILE);
-    assert!(p.scan_relation(1, tags(&[("type", "boundary")])).unwrap());
-    assert!(!p.scan_relation(2, tags(&[("type", "route")])).unwrap());
+    assert!(p.scan_relation(1, [("type", "boundary")]).unwrap());
+    assert!(!p.scan_relation(2, [("type", "route")]).unwrap());
 
     let ring = vec![ll(0.0, 0.0), ll(1.0, 0.0), ll(1.0, 1.0), ll(0.0, 1.0), ll(0.0, 0.0)];
     let hole = vec![ll(0.2, 0.2), ll(0.4, 0.2), ll(0.4, 0.4), ll(0.2, 0.2)];
@@ -256,8 +256,8 @@ fn relation_membership_and_postscan() {
         (10, vec![("type", "route"), ("ref", "A1")]),
         (11, vec![("type", "route"), ("network", "e-road")]),
     ] {
-        assert!(p.scan_relation(id, tags(&t)).unwrap());
-        rels.store_tags(id, tags(&t));
+        assert!(p.scan_relation(id, t.iter().copied()).unwrap());
+        rels.store_tags(id, tags(&t).to_vec());
     }
     rels.add_member(10, MemberKind::Way, 99, "forward");
     rels.add_member(11, MemberKind::Relation, 10, "");
@@ -270,7 +270,7 @@ fn relation_membership_and_postscan() {
         .process(Object {
             kind: ObjectKind::Way,
             id: 99,
-            tags: vec![],
+            tags: TagBuf::new(),
             nodes: vec![ll(0.0, 0.0), ll(1.0, 1.0)],
             relations: rels.relations_for(MemberKind::Way, 99),
             ..Default::default()

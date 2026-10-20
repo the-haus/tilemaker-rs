@@ -249,7 +249,7 @@ pub fn generate(
         if stopped {
             break;
         }
-        let tiles = renderer.zoom_tiles(z);
+        let tiles = pool.install(|| renderer.zoom_tiles(z));
         let total = tiles.len();
         // Render (and compress) on worker threads, continuously, while the
         // tiles are handed out in order here.

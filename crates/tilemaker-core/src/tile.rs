@@ -29,21 +29,14 @@ impl Renderer {
         o.min_zoom <= z && l.minzoom <= z && z <= l.maxzoom
     }
 
-    /// The tiles at zoom `z` that hold anything, with their objects.
+    /// The tiles at zoom `z` that hold anything, with their objects
+    /// (built on the rayon pool this runs in).
     pub fn zoom_tiles(&self, z: u8) -> Vec<(TileCoord, Vec<u32>)> {
+        use rayon::prelude::*;
         let d = &self.data;
         let dz = d.base_zoom - z;
-        let mut map: HashMap<TileCoord, Vec<u32>> = HashMap::new();
-        for (t, objs) in &d.tiles {
-            let mut visible = objs
-                .iter()
-                .copied()
-                .filter(|&o| self.visible(&d.objects[o as usize], z))
-                .peekable();
-            if visible.peek().is_some() {
-                map.entry(t.parent(dz)).or_default().extend(visible);
-            }
-        }
+        // Large objects, by tile at this zoom (few).
+        let mut large: HashMap<TileCoord, Vec<u32>> = HashMap::new();
         for &(a, b, o) in &d.large {
             if !self.visible(&d.objects[o as usize], z) {
                 continue;
@@ -51,19 +44,46 @@ impl Renderer {
             let (a, b) = (a.parent(dz), b.parent(dz));
             for x in a.x..=b.x {
                 for y in a.y..=b.y {
-                    map.entry(TileCoord::new(x, y)).or_default().push(o);
+                    large.entry(TileCoord::new(x, y)).or_default().push(o);
                 }
             }
         }
-        let mut tiles: Vec<(TileCoord, Vec<u32>)> = map
-            .into_iter()
-            .filter(|(t, _)| self.in_bounds(*t, z))
-            .map(|(t, mut v)| {
+        // Base tiles grouped by their tile at this zoom.
+        let mut base: Vec<(TileCoord, &Vec<u32>)> = d.tiles.iter().map(|(t, v)| (t.parent(dz), v)).collect();
+        base.par_sort_unstable_by_key(|(t, _)| (t.x, t.y));
+        let groups: Vec<&[(TileCoord, &Vec<u32>)]> = base.chunk_by(|a, b| a.0 == b.0).collect();
+        let mut tiles: Vec<(TileCoord, Vec<u32>)> = groups
+            .into_par_iter()
+            .filter_map(|g| {
+                let t = g[0].0;
+                if !self.in_bounds(t, z) {
+                    return None;
+                }
+                let mut v: Vec<u32> = g
+                    .iter()
+                    .flat_map(|(_, objs)| objs.iter().copied())
+                    .filter(|&o| self.visible(&d.objects[o as usize], z))
+                    .collect();
+                if let Some(l) = large.get(&t) {
+                    v.extend_from_slice(l);
+                }
+                if v.is_empty() {
+                    return None;
+                }
                 v.sort_unstable();
                 v.dedup();
-                (t, v)
+                Some((t, v))
             })
             .collect();
+        // Tiles that only large objects reach.
+        let seen: std::collections::HashSet<TileCoord> = base.iter().map(|(t, _)| *t).collect();
+        for (t, mut v) in large {
+            if !seen.contains(&t) && self.in_bounds(t, z) {
+                v.sort_unstable();
+                v.dedup();
+                tiles.push((t, v));
+            }
+        }
         tiles.sort_unstable_by_key(|(t, _)| (t.x, t.y));
         tiles
     }

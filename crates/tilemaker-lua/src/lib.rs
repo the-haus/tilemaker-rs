@@ -18,6 +18,7 @@
 mod context;
 mod output;
 mod relations;
+mod tags;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -28,6 +29,7 @@ use context::Context;
 pub use context::{Object, ObjectKind};
 pub use output::{Attribute, AttributeValue, GeometryKind, OutputGeometry, PendingOutput, ProcessedObject};
 pub use relations::{MemberKind, ScannedRelations};
+pub use tags::TagBuf;
 
 /// A profile error (with the Lua traceback when there is one).
 #[derive(Debug, thiserror::Error)]
@@ -195,17 +197,21 @@ impl LuaProfile {
 
     /// Run `relation_scan_function` for a relation; whether it called
     /// `Accept()`.
-    pub fn scan_relation(&mut self, id: i64, tags: Vec<(String, String)>) -> Result<bool, ProfileError> {
+    pub fn scan_relation<'a>(
+        &mut self,
+        id: i64,
+        tags: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> Result<bool, ProfileError> {
         let Some(f) = &self.scan_fn else { return Ok(false) };
-        self.lua.app_data_mut::<Context>().unwrap().begin(Object {
-            kind: ObjectKind::Relation,
-            id,
-            tags,
-            ..Object::default()
+        self.lua.app_data_mut::<Context>().unwrap().begin_with(|o| {
+            o.kind = ObjectKind::Relation;
+            o.id = id;
+            o.tags.extend(tags);
         });
-        f.call::<()>(self.compat.clone())
-            .map_err(lua_err(format!(" scanning relation {id}")))?;
-        let c = self.lua.app_data_ref::<Context>().unwrap();
+        let r = f.call::<()>(self.compat.clone());
+        let mut c = self.lua.app_data_mut::<Context>().unwrap();
+        c.finish();
+        r.map_err(lua_err(format!(" scanning relation {id}")))?;
         Ok(c.accepted)
     }
 
@@ -217,44 +223,52 @@ impl LuaProfile {
         };
         self.lua.app_data_mut::<Context>().unwrap().postscan = Some(relations);
         for &id in ids {
-            let tags = {
-                let c = self.lua.app_data_ref::<Context>().unwrap();
-                c.postscan
-                    .as_ref()
-                    .unwrap()
-                    .tags(id)
-                    .map(|t| t.to_vec())
-                    .unwrap_or_default()
-            };
-            self.lua.app_data_mut::<Context>().unwrap().begin(Object {
-                kind: ObjectKind::Relation,
-                id,
-                tags,
-                ..Object::default()
-            });
-            f.call::<()>(self.compat.clone())
-                .map_err(lua_err(format!(" in relation_postscan_function for relation {id}")))?;
+            {
+                let mut c = self.lua.app_data_mut::<Context>().unwrap();
+                let tags = c.postscan.as_ref().unwrap().tags(id).map(|t| t.to_vec());
+                c.begin_with(|o| {
+                    o.kind = ObjectKind::Relation;
+                    o.id = id;
+                    o.tags
+                        .extend(tags.iter().flatten().map(|(k, v)| (k.as_str(), v.as_str())));
+                });
+            }
+            let r = f.call::<()>(self.compat.clone());
+            self.lua.app_data_mut::<Context>().unwrap().finish();
+            r.map_err(lua_err(format!(" in relation_postscan_function for relation {id}")))?;
         }
         Ok(self.lua.app_data_mut::<Context>().unwrap().postscan.take().unwrap())
     }
 
     /// Run the node, way or relation function for an object.
     pub fn process(&mut self, object: Object) -> Result<ProcessedObject, ProfileError> {
-        let (f, what) = match object.kind {
+        self.process_with(|o| *o = object)
+    }
+
+    /// Like [`process`](Self::process) for an object that `fill` writes
+    /// into the profile's own (reset) object, reusing its buffers: no
+    /// allocations per object for tags and node lists.
+    pub fn process_with(&mut self, fill: impl FnOnce(&mut Object)) -> Result<ProcessedObject, ProfileError> {
+        let (kind, multipolygon, id) = {
+            let mut c = self.lua.app_data_mut::<Context>().unwrap();
+            c.begin_with(fill);
+            let o = c.object();
+            (o.kind, o.multipolygon, o.id)
+        };
+        let (f, what) = match kind {
             ObjectKind::Node => (&self.node_fn, "node"),
             // tilemaker hands multipolygons to way_function.
             ObjectKind::Way => (&self.way_fn, "way"),
-            ObjectKind::Relation if object.multipolygon => (&self.way_fn, "relation"),
+            ObjectKind::Relation if multipolygon => (&self.way_fn, "relation"),
             ObjectKind::Relation => (&self.relation_fn, "relation"),
         };
-        let Some(f) = f else {
-            return Ok(ProcessedObject::default());
+        let r = match f {
+            Some(f) => f.call::<()>(self.compat.clone()),
+            None => Ok(()),
         };
-        let id = object.id;
-        self.lua.app_data_mut::<Context>().unwrap().begin(object);
-        f.call::<()>(self.compat.clone())
-            .map_err(lua_err(format!(" processing {what} {id}")))?;
-        Ok(self.lua.app_data_mut::<Context>().unwrap().finish())
+        let out = self.lua.app_data_mut::<Context>().unwrap().finish();
+        r.map_err(lua_err(format!(" processing {what} {id}")))?;
+        Ok(out)
     }
 
     /// Call `exit_function`, if any.
