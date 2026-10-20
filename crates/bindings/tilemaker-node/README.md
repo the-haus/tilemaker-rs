@@ -92,7 +92,7 @@ system is downloaded.
 
 | | Supported | Notes |
 |---|---|---|
-| Node.js | **18 or newer** | N-API version 6. Tested on Node 20, 22 and 24 in CI; every release is also installed and run on Node 18 on every platform before it is published. |
+| Node.js | **18 or newer** | N-API version 6. Tested on Node 20, 22 and 24 in CI; every release is also installed and run on the oldest supported Node on every platform before it is published (18; 20 on Windows arm64). |
 | Module systems | ESM and CommonJS | `import` and `require()` both work. |
 | TypeScript | optional | Declarations are bundled; no `@types` package is needed. |
 
@@ -107,7 +107,7 @@ system is downloaded.
 | macOS | x64 (Intel) | — | `@tilemaker-rs/node-darwin-x64` | macOS 10.15 |
 | macOS | arm64 (Apple Silicon) | — | `@tilemaker-rs/node-darwin-arm64` | macOS 11 |
 | Windows | x64 | MSVC | `@tilemaker-rs/node-win32-x64-msvc` | Windows 10 |
-| Windows | arm64 | MSVC | `@tilemaker-rs/node-win32-arm64-msvc` | Windows 10 |
+| Windows | arm64 | MSVC | `@tilemaker-rs/node-win32-arm64-msvc` | Windows 10; Node.js 20 or newer (no Node 18 exists for Windows on Arm) |
 
 Every binary is built natively on its own OS and architecture with LuaJIT
 for tile profiles, and the full test suite runs against it before release.

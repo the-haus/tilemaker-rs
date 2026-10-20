@@ -173,7 +173,8 @@ jobs:
           - { os: macos-15-intel, triple: darwin-x64 }
           - { os: macos-latest, triple: darwin-arm64 }
           - { os: windows-latest, triple: win32-x64-msvc }
-          - { os: windows-11-arm, triple: win32-arm64-msvc }
+          # Node 18 was never built for Windows on Arm; 20 is the first.
+          - { os: windows-11-arm, triple: win32-arm64-msvc, node: "20" }
     steps:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
@@ -183,7 +184,7 @@ jobs:
       - if: ${{ !matrix.image }}
         uses: actions/setup-node@v5
         with:
-          node-version: "18"
+          node-version: ${{ matrix.node || '18' }}
           # Not the root package.json's Yarn 4 (setup-node would run Yarn 1).
           package-manager-cache: false
       - name: install and use
