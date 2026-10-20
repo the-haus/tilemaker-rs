@@ -25,8 +25,31 @@ impl<'a> Reader<'a> {
         self.pos >= self.buf.len()
     }
 
-    #[inline]
+    #[inline(always)]
     pub(crate) fn varint(&mut self) -> Result<u64, Error> {
+        // Fast path: one byte, or a whole varint's worth of bytes left (no
+        // per-byte bounds checks).
+        if let Some(rest) = self.buf.get(self.pos..self.pos + 10) {
+            let b0 = rest[0];
+            if b0 < 0x80 {
+                self.pos += 1;
+                return Ok(b0 as u64);
+            }
+            let mut result = (b0 & 0x7f) as u64;
+            for (i, &b) in rest.iter().enumerate().skip(1) {
+                result |= ((b & 0x7f) as u64) << (7 * i);
+                if b < 0x80 {
+                    self.pos += i + 1;
+                    return Ok(result);
+                }
+            }
+            return Err(Error::Corrupt("varint too long"));
+        }
+        self.varint_slow()
+    }
+
+    #[cold]
+    fn varint_slow(&mut self) -> Result<u64, Error> {
         let mut result: u64 = 0;
         let mut shift = 0u32;
         loop {
