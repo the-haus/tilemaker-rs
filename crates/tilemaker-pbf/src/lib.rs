@@ -21,7 +21,7 @@ pub mod parallel;
 mod proto;
 pub mod write;
 
-pub use blob::{decompress_blob, BlobInfo, BlobKind, BlobReader};
+pub use blob::{blob_compression, decompress_blob, BlobInfo, BlobKind, BlobReader};
 pub use block::{
     BlockKinds, DecodeOptions, ElementType, Info, InfoRef, Member, Node, PrimitiveBlock, Relation, Tags, Way,
 };

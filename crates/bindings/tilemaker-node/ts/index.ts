@@ -32,6 +32,8 @@ import {
   type Element,
   type ElementOptions,
   type Feature,
+  type FileInfo,
+  type FileInfoOptions,
   type FeatureOptions,
   type PbfHeader,
   type Tile,
@@ -225,6 +227,11 @@ export class PbfReader {
     return writeGeoJSONSeqWith(async () => this.#native, options);
   }
 
+  /** What the file holds (see {@link fileInfo}). */
+  fileInfo(options: FileInfoOptions = {}): Promise<FileInfo> {
+    return fileInfoWith(async () => this.#native, options);
+  }
+
   /** Stream raw elements: nodes, ways (node ids, optionally coordinates) and relations (members). */
   elements(options: ElementOptions = {}): OsmStream<Element> {
     const opts = nativeOptions(options);
@@ -416,6 +423,32 @@ async function writeGeoJSONSeqWith(
  */
 export function writeGeoJSONSeq(input: string | URL, options: WriteGeoJSONSeqOptions): Promise<ExportStats> {
   return writeGeoJSONSeqWith(() => openNative(input), options);
+}
+
+async function fileInfoWith(reader: () => Promise<NativeReader>, options: FileInfoOptions): Promise<FileInfo> {
+  const opts: { extended?: boolean; threads?: number } = {};
+  if (options.extended !== undefined) opts.extended = options.extended;
+  if (options.threads !== undefined) opts.threads = options.threads;
+  const stream = new OsmStream<never, FileInfo>(
+    async (cb) => (await reader()).fileInfo(opts, cb),
+    () => [],
+    options.onProgress,
+    options.signal,
+  );
+  for await (const _ of stream) {
+    void _;
+  }
+  return stream.stats;
+}
+
+/**
+ * What a PBF file holds, like `osmium fileinfo -e`: its header, size,
+ * blocks and their compression; with `extended: true` it reads every
+ * element (on all cores) for counts, id ranges, the data's bounding box,
+ * timestamps, ordering and metadata.
+ */
+export function fileInfo(path: string | URL, options: FileInfoOptions = {}): Promise<FileInfo> {
+  return fileInfoWith(() => openNative(path), options);
 }
 
 /** {@link PbfReader.tiles} on a path. */

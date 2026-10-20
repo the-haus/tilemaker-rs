@@ -16,6 +16,7 @@ pub mod engine;
 pub mod enrich;
 pub mod filter;
 pub mod geojson;
+pub mod info;
 mod parents;
 pub mod record;
 
@@ -27,6 +28,7 @@ pub use engine::{
 pub use enrich::{Enrich, Extras, Parent, Transform};
 pub use filter::{BlockFilter, FilterParseError, FilterSet, TagFilter};
 pub use geojson::{write_geojson_seq, GeoJsonOptions};
+pub use info::{file_info, DataInfo, FileInfo, MetadataInfo, PerType};
 pub use record::{Element, Feature, Geometry, GeometryType, MemberRecord, Meta, TagSelection};
 pub use tilemaker_pbf::{ElementType, PbfFile};
 

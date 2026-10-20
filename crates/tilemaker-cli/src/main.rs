@@ -31,6 +31,21 @@ struct Cli {
 enum Command {
     /// Stream filtered, assembled features as newline-delimited GeoJSON.
     Export(Box<ExportArgs>),
+    /// Show what a PBF file holds: header, and with -e counts, ids,
+    /// bounding box, timestamps (like osmium fileinfo).
+    Fileinfo {
+        /// The .osm.pbf file.
+        path: PathBuf,
+        /// Read every element (counts, ids, bounding box, timestamps, …).
+        #[arg(short, long)]
+        extended: bool,
+        /// Print JSON.
+        #[arg(long)]
+        json: bool,
+        /// Number of threads (0: all cores).
+        #[arg(long, default_value_t = 0)]
+        threads: usize,
+    },
     /// Count features per zoom and layer in an .mbtiles or .pmtiles file.
     Inspect {
         /// The tileset.
@@ -173,6 +188,12 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Command::Export(a)) => export(*a),
+        Some(Command::Fileinfo {
+            path,
+            extended,
+            json,
+            threads,
+        }) => fileinfo(&path, extended, json, threads),
         Some(Command::Inspect {
             path,
             json,
@@ -348,6 +369,92 @@ fn export(a: ExportArgs) -> Result<()> {
         r => r?,
     };
     eprintln!("{}", serde_json::to_string(&stats)?);
+    Ok(())
+}
+
+fn fileinfo(path: &std::path::Path, extended: bool, json: bool, threads: usize) -> Result<()> {
+    use tilemaker_export::geojson::iso8601;
+    let file = PbfFile::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let info = tilemaker_export::file_info(&file, extended, threads, |_| tilemaker_export::Flow::Continue)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&info.to_json())?);
+        return Ok(());
+    }
+    let h = &info.header;
+    let compression: Vec<String> = info.compression.iter().map(|(k, n)| format!("{k}: {n}")).collect();
+    println!(
+        "File:\n  Name: {}\n  Size: {}\n  Blocks: {} ({})",
+        info.path,
+        info.size,
+        info.blocks,
+        compression.join(", ")
+    );
+    println!("Header:");
+    if let Some(b) = h.bbox {
+        println!(
+            "  Bounding box: ({},{},{},{})",
+            b.min_lon, b.min_lat, b.max_lon, b.max_lat
+        );
+    }
+    if let Some(p) = &h.writing_program {
+        println!("  Writing program: {p}");
+    }
+    println!("  Required features: {}", h.required_features.join(", "));
+    println!("  Optional features: {}", h.optional_features.join(", "));
+    if let Some(t) = h.replication_timestamp {
+        println!("  Replication timestamp: {}", iso8601(t));
+    }
+    if let Some(n) = h.replication_sequence_number {
+        println!("  Replication sequence number: {n}");
+    }
+    if let Some(u) = &h.replication_base_url {
+        println!("  Replication base URL: {u}");
+    }
+    let Some(d) = &info.data else { return Ok(()) };
+    let yes = |b: bool| if b { "yes" } else { "no" };
+    let id = |v: Option<i64>| v.map_or("-".to_string(), |v| v.to_string());
+    println!("Data:");
+    if let Some(b) = d.bbox {
+        println!("  Bounding box: ({},{},{},{})", b[0], b[1], b[2], b[3]);
+    }
+    if let Some([first, last]) = d.timestamps {
+        println!(
+            "  Timestamps:\n    First: {}\n    Last: {}",
+            iso8601(first),
+            iso8601(last)
+        );
+    }
+    println!("  Objects ordered (by type and id): {}", yes(d.objects_ordered));
+    println!("  Multiple versions of same object: {}", yes(d.multiple_versions));
+    println!(
+        "  Number of nodes: {}\n  Number of ways: {}\n  Number of relations: {}",
+        d.counts.nodes, d.counts.ways, d.counts.relations
+    );
+    println!(
+        "  Tagged nodes: {}\n  Tagged ways: {}\n  Tagged relations: {}",
+        d.tagged.nodes, d.tagged.ways, d.tagged.relations
+    );
+    println!(
+        "  Way node references: {}\n  Relation members: {}",
+        d.way_nodes, d.relation_members
+    );
+    println!(
+        "  Smallest node ID: {}\n  Smallest way ID: {}\n  Smallest relation ID: {}",
+        id(d.min_id.nodes),
+        id(d.min_id.ways),
+        id(d.min_id.relations)
+    );
+    println!(
+        "  Largest node ID: {}\n  Largest way ID: {}\n  Largest relation ID: {}",
+        id(d.max_id.nodes),
+        id(d.max_id.ways),
+        id(d.max_id.relations)
+    );
+    println!(
+        "Metadata:\n  All objects have: {}\n  Some objects have: {}",
+        d.metadata.all.join(", "),
+        d.metadata.some.join(", ")
+    );
     Ok(())
 }
 

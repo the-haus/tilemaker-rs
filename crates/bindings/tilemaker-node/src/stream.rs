@@ -73,7 +73,7 @@ impl StreamEvent {
             }
             StreamEvent::End(stats) => {
                 o.set("type", "end")?;
-                o.set("stats", env.to_js_value(&stats)?)?;
+                o.set("stats", env.to_js_value(&as_doubles(stats))?)?;
             }
             StreamEvent::Error(message) => {
                 o.set("type", "error")?;
@@ -81,6 +81,21 @@ impl StreamEvent {
             }
         }
         Ok(o)
+    }
+}
+
+/// Integers as doubles: napi turns those beyond 32 bits into BigInts,
+/// while JS wants plain numbers (ids and byte counts fit in 53 bits).
+fn as_doubles(v: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match v {
+        Value::Number(n) if !n.is_f64() => n
+            .as_f64()
+            .and_then(serde_json::Number::from_f64)
+            .map_or(Value::Number(n), Value::Number),
+        Value::Array(a) => Value::Array(a.into_iter().map(as_doubles).collect()),
+        Value::Object(o) => Value::Object(o.into_iter().map(|(k, v)| (k, as_doubles(v))).collect()),
+        other => other,
     }
 }
 

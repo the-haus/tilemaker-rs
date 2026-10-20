@@ -51,6 +51,15 @@ pub struct PbfHeader {
     pub locations_on_ways: bool,
 }
 
+/// Options for `fileInfo()`.
+#[napi(object)]
+pub struct FileInfoOptions {
+    /// Read every element.
+    pub extended: Option<bool>,
+    /// Worker threads (default: all cores).
+    pub threads: Option<u32>,
+}
+
 /// An open PBF file.
 #[napi]
 pub struct NativeReader {
@@ -130,6 +139,24 @@ impl NativeReader {
             let stats = tilemaker_export::write_geojson_seq(&file, &opts, geojson, &mut out, progress)
                 .map_err(|e| e.to_string())?;
             serde_json::to_value(&stats).map_err(|e| e.to_string())
+        }))
+    }
+
+    /// What the file holds; with `extended`, read every element (counts,
+    /// ids, bounding box, timestamps, …). Ends with the info as its stats.
+    #[napi(ts_args_type = "options: StreamOptions & { extended?: boolean }, callback: (event: unknown) => void")]
+    pub fn file_info(&self, options: FileInfoOptions, callback: JsFunction) -> Result<NativeStream> {
+        let cb = stream::callback(&callback)?;
+        let file = self.file.clone();
+        Ok(stream::spawn_task(cb, move |progress| {
+            let info = tilemaker_export::file_info(
+                &file,
+                options.extended.unwrap_or(false),
+                options.threads.unwrap_or(0) as usize,
+                progress,
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(info.to_json())
         }))
     }
 

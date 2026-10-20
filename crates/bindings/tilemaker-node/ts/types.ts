@@ -261,6 +261,62 @@ export interface PbfHeader {
   locationsOnWays: boolean;
 }
 
+/** Per element type. */
+export interface PerType<T> {
+  nodes: T;
+  ways: T;
+  relations: T;
+}
+
+/** What {@link fileInfo} finds by reading every element (`extended: true`). */
+export interface FileData {
+  counts: PerType<number>;
+  /** Elements with at least one tag. */
+  tagged: PerType<number>;
+  /** Smallest ids (`null` when there are none of the type). */
+  minId: PerType<number | null>;
+  maxId: PerType<number | null>;
+  /** Node references of all ways. */
+  wayNodes: number;
+  /** Members of all relations. */
+  relationMembers: number;
+  /** Bounding box of the nodes `[west, south, east, north]`. */
+  bbox: [number, number, number, number] | null;
+  /** Earliest and latest timestamps (seconds since the epoch), when the file has them. */
+  timestamps: [number, number] | null;
+  /** Elements are ordered by type, then id. */
+  objectsOrdered: boolean;
+  /** An element appears more than once in a row (history files). */
+  multipleVersions: boolean;
+  /** Metadata attributes (`version`, `timestamp`, `changeset`, `uid`, `user`) that all / some objects have. */
+  metadata: { all: string[]; some: string[] };
+}
+
+/** What a PBF file holds (like `osmium fileinfo -e`). */
+export interface FileInfo {
+  path: string;
+  /** Size in bytes. */
+  size: number;
+  /** Data blocks. */
+  blocks: number;
+  /** Blocks per compression: `zlib`, `zstd`, `lz4`, `none`, … */
+  compression: Record<string, number>;
+  header: PbfHeader;
+  /** With `extended: true`. */
+  data: FileData | null;
+}
+
+export interface FileInfoOptions {
+  /** Read every element: counts, ids, bounding box, timestamps, ordering, metadata (default false: header only). */
+  extended?: boolean;
+  /** Decoding threads (default: all cores). */
+  threads?: number;
+  /** Called with progress (extended reads). */
+  onProgress?: (progress: Progress) => void;
+  /** Abort the read. */
+  signal?: AbortSignal;
+}
+
 /** Options shared by {@link PbfReader.features} and {@link PbfReader.elements}. */
 export interface CommonOptions {
   /**

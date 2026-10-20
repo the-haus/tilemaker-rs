@@ -133,6 +133,15 @@ impl PbfFile {
         Ok(buf)
     }
 
+    /// How a blob is compressed (see [`crate::blob_compression`]); reads
+    /// only the first bytes of its body.
+    pub fn blob_compression(&self, info: &BlobInfo) -> Result<&'static str, Error> {
+        let mut head = vec![0u8; (info.size as usize).min(24)];
+        read_at(&self.file, &mut head, info.offset)?;
+        // Only the data field's key is read (after at most a raw_size).
+        crate::blob::blob_compression(&head)
+    }
+
     /// Read and decode one block.
     pub fn decode_block(&self, index: usize, opts: DecodeOptions) -> Result<PrimitiveBlock, Error> {
         let info = self

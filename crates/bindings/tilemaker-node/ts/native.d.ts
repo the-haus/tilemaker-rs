@@ -160,6 +160,7 @@ export interface NativeReader {
   tiles(options: NativeTileOptions, callback: (event: NativeEvent) => void): NativeStream;
   writeTiles(options: NativeTileOptions, callback: (event: NativeEvent) => void): NativeStream;
   writeGeoJSONSeq(options: NativeStreamOptions, callback: (event: NativeEvent) => void): NativeStream;
+  fileInfo(options: { extended?: boolean; threads?: number }, callback: (event: NativeEvent) => void): NativeStream;
 }
 
 export function open(path: string): Promise<NativeReader>;

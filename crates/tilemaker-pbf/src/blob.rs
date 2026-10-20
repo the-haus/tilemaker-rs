@@ -65,6 +65,32 @@ pub(crate) fn parse_blob_header(buf: &[u8]) -> Result<(BlobKind, u32), Error> {
     Ok((kind, size))
 }
 
+/// How a blob's data is compressed: `"none"`, `"zlib"`, `"lzma"`,
+/// `"bzip2"`, `"lz4"` or `"zstd"` (from the first bytes of its body).
+pub fn blob_compression(buf: &[u8]) -> Result<&'static str, Error> {
+    let mut r = Reader::new(buf);
+    while let Some((field, wire)) = r.field()? {
+        let name = match (field, wire) {
+            (1, LEN) => "none",
+            (3, LEN) => "zlib",
+            (4, LEN) => "lzma",
+            (5, LEN) => "bzip2",
+            (6, LEN) => "lz4",
+            (7, LEN) => "zstd",
+            (2, _) => {
+                r.varint()?;
+                continue;
+            }
+            _ => {
+                r.skip(wire)?;
+                continue;
+            }
+        };
+        return Ok(name);
+    }
+    Err(Error::Corrupt("blob without data"))
+}
+
 /// Decompress a `Blob` body into `out` (cleared first).
 pub fn decompress_blob(buf: &[u8], out: &mut Vec<u8>) -> Result<(), Error> {
     out.clear();

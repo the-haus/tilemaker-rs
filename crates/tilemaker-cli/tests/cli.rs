@@ -250,3 +250,21 @@ fn reports_errors() {
         .unwrap();
     assert!(String::from_utf8_lossy(&o.stderr).contains("invalid tag filter"));
 }
+
+#[test]
+fn fileinfo_text_and_json() {
+    let d = dir("fileinfo");
+    let pbf = fixture(&d);
+    let o = bin().args(["fileinfo", "-e", pbf.to_str().unwrap()]).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let text = String::from_utf8(o.stdout).unwrap();
+    assert!(text.contains("Number of nodes: 5"), "{text}");
+    assert!(text.contains("Objects ordered (by type and id): yes"), "{text}");
+    let o = bin()
+        .args(["fileinfo", "--json", pbf.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["header"]["sorted"], true);
+    assert!(v["data"].is_null());
+}

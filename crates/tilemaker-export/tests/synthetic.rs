@@ -735,3 +735,32 @@ fn member_of_enrich_and_transform() {
     assert_eq!(street.geometry.coords, vec![0.0, 0.0, 0.5, 0.0]);
     assert!(street.extras.area.is_none());
 }
+
+#[test]
+fn file_info_counts_and_ranges() {
+    let path = town(sorted());
+    let file = PbfFile::open(&path).unwrap();
+    let head = file_info(&file, false, 1, |_| Flow::Continue).unwrap();
+    assert!(head.data.is_none());
+    assert_eq!(head.compression.get("zlib"), Some(&head.blocks));
+    let info = file_info(&file, true, 2, |_| Flow::Continue).unwrap();
+    let d = info.data.clone().unwrap();
+    assert_eq!((d.counts.nodes, d.counts.ways, d.counts.relations), (14, 6, 3));
+    assert_eq!(d.min_id.ways, Some(100));
+    assert_eq!(d.max_id.relations, Some(202));
+    assert!(d.objects_ordered && !d.multiple_versions);
+    assert_eq!(d.bbox, Some([0.0, 0.0, 10.0, 10.0]));
+    assert_eq!(info.to_json()["header"]["sorted"], true);
+    // Unsorted input is reported as such.
+    let unsorted = town(WriterOptions::default());
+    let mut w = PbfWriter::new(Vec::new());
+    w.node(5, 0, 0, &[]).unwrap();
+    w.node(3, 0, 0, &[]).unwrap();
+    w.node(3, 0, 0, &[]).unwrap();
+    std::fs::write(&unsorted, w.finish().unwrap()).unwrap();
+    let d = file_info(&PbfFile::open(&unsorted).unwrap(), true, 1, |_| Flow::Continue)
+        .unwrap()
+        .data
+        .unwrap();
+    assert!(!d.objects_ordered && d.multiple_versions);
+}
